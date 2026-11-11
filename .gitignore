@@ -1,0 +1,24 @@
+# Code only. Each deployment's art, data, settings and names stay local.
+.env
+REVIEW_PASSWORD.txt
+.dev.vars
+.wrangler/
+site/wrangler.toml
+site/public/gallery.html
+site/items.json
+tools/site_fields.py
+tools/review.py
+Images/
+thumbs/
+zips/
+index/
+archive/
+updates/
+upload_batches/
+upload_list.json
+analysis.csv
+build_report.json
+verdicts.jsonl
+*.log
+__pycache__/
+PRIVATE_NOTES.md

@@ -1,0 +1,36 @@
+# Copy to wrangler.toml (never committed) and fill in your names. See the README.
+name = "art-drop-gateway"
+main = "worker.js"
+compatibility_date = "2026-06-01"
+# Never expose a *.workers.dev address. The art is reachable only through the password-gated domain.
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "review.example.com", custom_domain = true }]
+
+[assets]
+directory = "public"
+binding = "ASSETS"
+run_worker_first = true
+html_handling = "none"
+
+[[r2_buckets]]
+binding = "ART"
+bucket_name = "art-drop-gateway"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "art-drop-gateway"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+# REVIEW_PASSWORD is a Worker secret. Without it, every request gets a 401.
+
+# Display words for the gallery. All are optional.
+[vars]
+SITE_TITLE = "Art Review"
+ITEM_NOUN = "Item"
+ITEM_NOUNS = "items"
+ARTIST_NAME = "Artist"
+# Only used when items carry "mint": true for a chosen set.
+CHOSEN_LABEL = "Chosen"
+OTHERS_LABEL = "Not chosen"
+OTHERS_TAG = "N"

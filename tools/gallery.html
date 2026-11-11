@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Art Review</title>
+<style>
+:root{--bg:#121316;--panel:#1c1e23;--line:#30333b;--text:#ecebe6;--dim:#9b9da6;--ok:#4caf7a;--flag:#ef5b4c;--accent:#e2b34b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 -apple-system,system-ui,sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);padding:8px 12px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+h1{font-size:15px;margin:0 8px 0 0}
+select,input,button{background:#26282f;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:6px 9px;font:inherit;min-height:34px}
+button{cursor:pointer}button:hover{border-color:var(--dim)}
+button.primary{background:var(--ok);border-color:var(--ok);color:#0b1a12;font-weight:600}
+.progress{height:4px;background:#26282f;margin-top:8px;border-radius:2px;overflow:hidden;display:flex}
+.progress i{display:block;height:100%}
+#stats{color:var(--dim);font-variant-numeric:tabular-nums}
+main{padding:12px}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--tile,170px),1fr));gap:8px}
+.tile{position:relative;background:var(--panel);border-radius:8px;overflow:hidden;cursor:pointer;outline:2px solid transparent;aspect-ratio:1}
+.tile img{display:block;width:100%;height:100%;object-fit:cover}
+.tile.char{background:repeating-conic-gradient(#3a3d45 0 25%,#262830 0 50%) 0 0/20px 20px}
+.tile.char img{object-fit:contain}
+.tile .id{position:absolute;left:5px;top:5px;background:#000a;padding:0 5px;border-radius:4px;font-size:11px;font-variant-numeric:tabular-nums}
+.tile .tags{position:absolute;right:5px;top:5px;display:flex;gap:3px}
+.tile .tags b{background:#000b;color:var(--accent);padding:0 4px;border-radius:4px;font-size:10px;font-weight:600}
+.tile.flag{outline-color:var(--flag)}.tile.ok::after{content:"\2713";position:absolute;left:5px;bottom:5px;width:24px;height:24px;line-height:24px;text-align:center;border-radius:50%;background:var(--ok);color:#0b1a12;font-size:14px;font-weight:700}.tile.cur{outline-color:var(--accent)}
+.tile.flag::after{content:attr(data-flags);position:absolute;left:0;right:40px;bottom:0;background:var(--flag);color:#fff;font-size:11px;font-weight:700;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px;border-radius:0 6px 0 0}
+.tile .tags b.star{background:var(--accent);color:#1c1608}
+.tile .tags b.cut{background:#55585f;color:#fff}
+.sheet{position:fixed;inset:0;z-index:10;background:#0b0c0ef5;display:none;overflow:auto}
+.sheet.open{display:block}
+.swrap{max-width:900px;margin:0 auto;padding:14px}
+.fix{display:grid;grid-template-columns:96px minmax(0,1fr);gap:10px;background:var(--panel);border-radius:8px;padding:10px;margin-bottom:8px}
+.fix img{width:96px;height:96px;object-fit:cover;border-radius:6px;cursor:pointer;display:block}
+.fix button.on{background:var(--accent);border-color:var(--accent);color:#1c1608}
+.fix p{margin:0 0 6px;font-size:13px;word-break:break-word}
+.box{max-width:360px;margin:18vh auto;background:var(--panel);border-radius:10px;padding:18px;display:flex;flex-direction:column;gap:10px}
+.tile .fl{position:absolute;right:5px;bottom:5px;width:34px;height:34px;border-radius:50%;background:#000a;border:1px solid #fff4;color:#fff;padding:0;min-height:0;line-height:1;font-size:17px}
+.tile .fl.on{background:var(--flag);border-color:var(--flag)}
+nav{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;padding:16px 0 28px}
+#help{color:var(--dim);font-size:12px;margin:0 0 10px}
+#detail{position:fixed;inset:0;z-index:10;background:#0b0c0ef5;display:none;overflow:auto}
+#detail.open{display:block}
+.dwrap{max-width:1180px;margin:0 auto;padding:12px;display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px}
+@media(max-width:820px){.dwrap{grid-template-columns:minmax(0,1fr)}header{position:static}}
+#stage{align-self:start;position:relative;background:repeating-conic-gradient(#3a3d45 0 25%,#262830 0 50%) 0 0/24px 24px;border-radius:8px;overflow:auto;max-height:calc(100vh - 80px)}
+#stage img{display:block;width:100%}
+#stage.zoom img{width:auto;max-width:none}
+.side{display:flex;flex-direction:column;gap:10px}
+.side h2{margin:0;font-size:20px}
+.meta{color:var(--dim);font-size:13px;word-break:break-word}
+.meta b{color:var(--text);font-weight:500}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips button.on{background:var(--flag);border-color:var(--flag);color:#fff}
+#layers button.on{background:var(--accent);border-color:var(--accent);color:#1c1608}
+textarea{width:100%;min-height:58px;background:#26282f;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:7px;font:inherit}
+.warn{color:var(--accent)}
+.chips.traits button{min-height:28px;padding:3px 8px;font-size:12px}
+.chips.traits button.on{background:var(--accent);border-color:var(--accent);color:#1c1608}
+.chips.traits button i{font-style:normal;color:var(--dim);margin-left:4px}
+.chips.traits button.on i{color:#1c1608}
+#tchips{margin-top:8px;display:none}
+#tchips button{background:var(--accent);border-color:var(--accent);color:#1c1608;min-height:28px;padding:3px 9px}
+#tchips button.plain{background:#26282f;border-color:var(--line);color:var(--text)}
+#detail{z-index:12}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.tabs button.on{background:var(--accent);border-color:var(--accent);color:#1c1608;font-weight:600}
+.fix.art{grid-template-columns:150px minmax(0,1fr);cursor:pointer}
+.fix.art img{width:150px;height:150px}
+@media(max-width:560px){.fix.art{grid-template-columns:110px minmax(0,1fr)}.fix.art img{width:110px;height:110px}}
+.badge{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;font-weight:700;margin-left:6px;vertical-align:1px}
+.badge.send{background:var(--flag);color:#fff}.badge.open{background:#55585f;color:#fff}.badge.fixed{background:var(--ok);color:#0b1a12}
+.guide{background:var(--panel);border-radius:8px;padding:10px 12px;margin:0 0 12px;font-size:13px}
+.guide p{margin:0 0 6px}.guide p:last-child{margin:0}
+body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.artist #note,body.artist #dbtns{display:none}
+#toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--flag);color:#fff;padding:9px 14px;border-radius:8px;display:none;z-index:20}
+</style></head><body>
+<header>
+ <div class="row">
+  <h1 id="ttl">Art Review</h1>
+  <select id="filter" aria-label="Filter"></select>
+  <select id="type" aria-label="Character type"></select>
+  <select id="sort" aria-label="Order">
+   <option value="id">ID order</option><option value="shuffle">Random sample</option>
+   <option value="contrast">Hardest to read first</option><option value="coverage">Smallest figure first</option>
+  </select>
+  <select id="view" aria-label="Layer">
+   <option value="combined">Combined</option><option value="character">Character only</option><option value="background">Background only</option>
+  </select>
+  <select id="tile" aria-label="Tile size"><option value="120">Small</option><option value="170" selected>Medium</option><option value="260">Large</option><option value="360">Huge</option></select>
+  <input id="jump" placeholder="Go to ID" inputmode="numeric" size="8" aria-label="Go to ID">
+  <button id="artbtn" class="primary">Artist view</button>
+  <button id="fixbtn">Fix list</button>
+  <button id="whobtn" title="Change reviewer"></button>
+  <span id="stats"></span>
+ </div>
+ <div class="row" id="tchips"></div>
+ <div class="progress"><i id="pOk" style="background:var(--ok)"></i><i id="pFlag" style="background:var(--flag)"></i></div>
+</header>
+<main>
+ <p id="help"></p>
+ <div id="grid"></div>
+ <nav><button id="prev">Back</button><span id="pageinfo"></span><button id="good" class="primary">Page looks good, next</button><button id="next">Skip page</button></nav>
+</main>
+<div id="detail"><div class="dwrap">
+ <div id="stage"><img id="dimg" alt=""></div>
+ <div class="side">
+  <div class="row" style="justify-content:space-between"><h2 id="dtitle"></h2><button id="dclose">Close</button></div>
+  <div class="row"><button id="dprev">&larr;</button><button id="dnext">&rarr;</button><span class="meta">Tap the art to zoom to 100%.</span></div>
+  <div class="chips" id="layers"></div>
+  <div class="chips" id="reasons"></div>
+  <textarea id="note" placeholder="Note for the artist (optional)"></textarea>
+  <div class="row" id="dbtns"><button class="primary" id="dok">OK</button><button id="dflag" style="background:var(--flag);border-color:var(--flag);color:#fff">Flag</button><button id="dclear">Clear</button></div>
+  <div class="meta" id="dmeta"></div>
+ </div>
+</div></div>
+<div id="fixes" class="sheet"><div class="swrap">
+ <div class="row" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">Fix list</h2><button id="fixclose">Close</button></div>
+ <p class="meta" id="fixsum"></p>
+ <div class="row" style="margin-bottom:12px"><a href="/artist.csv"><button class="primary">Download list for the artist</button></a><a href="/flagged.csv"><button>Download all flagged</button></a></div>
+ <div id="fixrows"></div>
+</div></div>
+<div id="artlist" class="sheet"><div class="swrap">
+ <div class="row" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0" id="artttl">Artist view</h2><button id="artclose">Close</button></div>
+ <div class="guide">
+  <p id="artintro"></p>
+  <p><b>Sent to you:</b> the team wants a change. <b>Under review:</b> someone flagged it, and the team has not decided yet. <b>Fixed:</b> the team checked your new art.</p>
+  <p>Tap a picture to see it full size, with its layers. When you publish a new delivery release, the site picks up the changed files within a day.</p>
+ </div>
+ <div class="tabs" id="arttabs"></div>
+ <div class="row" style="margin-bottom:12px"><label class="meta"><input type="checkbox" id="artnotes" style="min-height:0"> Only flags with a note</label><a id="artcsv" href="/flagged.csv"><button>Download this list</button></a></div>
+ <p class="meta" id="artsum"></p>
+ <div id="artrows"></div>
+ <nav><button id="artmore">Show more</button></nav>
+</div></div>
+<div id="whoask" class="sheet"><form class="box" id="whoform">
+ <h2 style="margin:0">Who is reviewing?</h2>
+ <p class="meta" style="margin:0">Each person gets their own review. Your name goes next to your flags and notes.</p>
+ <input id="whoname" list="whoknown" placeholder="Your name" maxlength="60" autocomplete="off" aria-label="Your name">
+ <datalist id="whoknown"></datalist>
+ <button class="primary">Start reviewing</button>
+</form></div>
+<div id="toast"></div>
+<script>
+const PAGE=60, REASONS=["Character damaged","Edge halo","Cut off","Background clash","Hard to read","Too similar to another","Not good enough"];
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let TR={},TCOUNT={};
+let items=[],byId={},ALL={},TRIAGE={},UPD={},ME="",list=[],page=0,cur=0,dLayer="combined",dReasons=new Set();
+// The artist reads flags and does not review. The name comes from the login.
+// Display words come from the Worker's settings (wrangler.toml [vars]), so one page serves any project.
+let CFG={title:"Art Review",noun:"Item",nouns:"items",artist:"Artist",chosen:"Chosen",others:"Not chosen",othersTag:"N"},HASCHOSEN=false;
+const isArtist=()=>ME.toLowerCase()==CFG.artist.toLowerCase();
+function applyConfig(){
+ document.title=$("ttl").textContent=CFG.title;
+ $("artbtn").textContent=$("artttl").textContent=`Flags for ${CFG.artist}`;
+ $("note").placeholder=`Note for ${CFG.artist} (optional)`;
+ const n=CFG.nouns,one=CFG.noun.toLowerCase(),a=/^[aeiou]/i.test(one)?"an":"a";
+ $("artintro").textContent=`These are the ${n} that the team flagged. Most problems are easy to see in the picture. Some flags also have a note.`;
+ $("help").innerHTML=esc(`Tap ${a} ${one} to see it full size. Tap the flag on a tile to flag it without opening it, and tap it again to remove your flag. "Page looks good" marks every ${one} that you did not flag as OK, for you only. Tap a trait on ${a} ${one}'s page to show only ${n} with that trait. Keys: arrows move, F flags, Enter opens, N next page. Tags: U updated by the artist`)+(HASCHOSEN?esc(`, ★ ${CFG.chosen}, ${CFG.othersTag} ${CFG.others}, P provisional background, C effect cleanup, T same traits as another chosen ${one}.`):".");
+}
+let DSEQ=null,ATAB="",ASHOW=0,AROWS=[];const ASTEP=60;
+// pull_update.py puts each update under a new key and records it in the item's v (images) and tv (thumbnails).
+// A prefix is used only in the exact shape pull_update.py writes, because URLs go into markup unescaped.
+const VPREFIX=/^r\/[0-9a-f]{16}\/$/,vp=p=>typeof p=="string"&&VPREFIX.test(p)?p:"";
+const thumbUrl=(d,k)=>vp(d.tv)?`/o/${d.tv}thumbs/${d.id}_${k}.webp`:`/thumbs/${d.id}_${k}.webp`;
+const fullUrl=(d,k)=>vp(d.v?.[k])?`/o/${d.v[k]}Images/ID${d.id}/${d.id}__${k}.png`:`/full/${d.id}/${k}.png`;
+const mine=id=>ALL[id]?.[ME];
+const flaggers=id=>Object.values(ALL[id]||{}).filter(r=>r.verdict=="flag");
+const okers=id=>Object.values(ALL[id]||{}).filter(r=>r.verdict=="ok");
+// True when this item's art changed after my last review, or I have not reviewed it since.
+const stale=id=>!!UPD[id]&&(!mine(id)||mine(id).verdict=="clear"||mine(id).at<=UPD[id].at);
+const FILTERS={
+ updated:["Updated, needs my look",d=>stale(d.id)],
+ roster:[()=>CFG.chosen,d=>d.mint],
+ todo:[()=>`${CFG.chosen}, not reviewed by me`,d=>d.mint&&(!mine(d.id)||mine(d.id).verdict=="clear"||stale(d.id))],
+ flag:["Flagged by anyone",d=>flaggers(d.id).length>0],
+ mine:["Flagged by me",d=>mine(d.id)?.verdict=="flag"],
+ split:["Reviewers disagree",d=>flaggers(d.id).length>0&&okers(d.id).length>0],
+ send:["Going to the artist",d=>TRIAGE[d.id]?.status=="send"],
+ ok:["Marked OK by me",d=>mine(d.id)?.verdict=="ok"],
+ prov:[()=>`${CFG.chosen}: provisional background`,d=>d.mint&&d.prov],
+ clean:[()=>`${CFG.chosen}: effect cleanup`,d=>d.mint&&d.cleanup],
+ caveat:[()=>`${CFG.chosen}: delivery note has a caveat`,d=>d.mint&&d.caveat],
+ size:[()=>`${CFG.chosen}: not 1024x1024`,d=>d.mint&&d.size!="1024x1024"],
+ twins:[()=>`${CFG.chosen}: same traits as another`,d=>d.mint&&(d.twins||[]).length>0],
+ clip:[()=>`${CFG.chosen}: touches left, top or right edge`,d=>d.mint&&(d.clip||[]).length>0],
+ mismatch:["Combined differs from its layers",d=>d.diff>MISMATCH],
+ err:["File errors",d=>!!d.errors],
+ cut:[()=>CFG.others,d=>HASCHOSEN&&!d.mint],
+ all:[()=>`All ${items.length.toLocaleString("en-US")}`,()=>true],
+};
+const MISMATCH=3;
+const hash=(id)=>{let h=2166136261;for(const c of id)h=Math.imul(h^c.charCodeAt(0),16777619);return h>>>0};
+function state(){try{return JSON.parse(localStorage.getItem("bw")||"{}")}catch{return{}}}
+function saveState(){try{localStorage.setItem("bw",JSON.stringify({me:ME,f:$("filter").value,ty:$("type").value,s:$("sort").value,v:$("view").value,t:$("tile").value,tr:TR,page}))}catch{}}
+async function post(batch,path="/verdict"){
+ try{const r=await fetch(path,{method:"POST",body:JSON.stringify(batch.map(b=>({...b,by:ME})))});if(!r.ok)throw new Error(r.status);}
+ catch(e){toast("Not saved: "+e.message+". Check the server.");throw e}
+}
+function toast(t){$("toast").textContent=t;$("toast").style.display="block";setTimeout(()=>$("toast").style.display="none",5000)}
+async function setV(id,verdict,reasons=[],note=""){const prev=mine(id),rec={id,by:ME,verdict,reasons,note,at:Math.floor(Date.now()/1000)};(ALL[id]??={})[ME]=rec;paintTile(id);stats();try{await post([rec]);fillFilters()}catch{if(prev)ALL[id][ME]=prev;else delete ALL[id][ME];paintTile(id);stats()}}
+function compute(){
+ const f=FILTERS[$("filter").value][1],s=$("sort").value,ty=$("type").value;
+ const tr=Object.entries(TR);
+ list=items.filter(d=>f(d)&&(!ty||d.type==ty)&&tr.every(([k,v])=>d.traits?.[k]==v));
+ if(s=="shuffle")list.sort((a,b)=>hash(a.id)-hash(b.id));
+ if(s=="contrast")list.sort((a,b)=>a.contrast-b.contrast);
+ if(s=="coverage")list.sort((a,b)=>a.coverage-b.coverage);
+}
+function pages(){return Math.max(1,Math.ceil(list.length/PAGE))}
+function pageItems(){return list.slice(page*PAGE,(page+1)*PAGE)}
+function tileClass(d){const v=mine(d.id)?.verdict,f=flaggers(d.id).length;return "tile"+($("view").value=="character"?" char":"")+(f?" flag":v=="ok"&&!stale(d.id)?" ok":"")}
+const flagText=id=>"FLAG: "+flaggers(id).map(r=>r.by).join(", ");
+function render(){
+ page=Math.min(page,pages()-1);cur=Math.min(cur,Math.max(0,pageItems().length-1));
+ const view=$("view").value;
+ $("grid").innerHTML=pageItems().map((d,i)=>{
+  const tags=(!HASCHOSEN?"":d.mint?`<b class="star" title="${esc(CFG.chosen)}">&#9733;</b>`:`<b class="cut" title="${esc(CFG.others)}">${esc(CFG.othersTag)}</b>`)+[UPD[d.id]?"U":"",d.prov?"P":"",d.cleanup?"C":"",(d.twins||[]).length?"T":""].filter(Boolean).map(t=>`<b>${t}</b>`).join("");
+  return `<div class="${tileClass(d)}${i==cur?" cur":""}" data-flags="${esc(flagText(d.id))}" data-id="${d.id}" data-i="${i}"><img loading="lazy" src="${thumbUrl(d,view)}" alt="${esc(CFG.noun)} ${d.id}"><span class="id">${d.id}</span><span class="tags">${tags}</span>${flagBtn(d.id)}</div>`}).join("");
+ $("pageinfo").textContent=`Page ${page+1} of ${pages()} (${list.length} ${CFG.nouns})`;
+ $("prev").disabled=page==0;
+ stats();saveState();
+}
+const flagBtn=id=>{const on=mine(id)?.verdict=="flag";return `<button class="fl${on?" on":""}" title="${on?"Remove my flag":"Flag"}" aria-label="${on?"Remove my flag from":"Flag"} ${id}" aria-pressed="${on}">&#9873;</button>`};
+function paintTile(id){const el=document.querySelector(`.tile[data-id="${id}"]`);if(el){const c=el.classList.contains("cur");el.className=tileClass(byId[id])+(c?" cur":"");el.dataset.flags=flagText(id);el.querySelector(".fl").outerHTML=flagBtn(id)}}
+function stats(){
+ // Progress counts the chosen set when the data has one, and every item when it does not.
+ const pool=HASCHOSEN?items.filter(d=>d.mint):items;
+ let ok=0,fl=0;for(const d of pool){if(stale(d.id))continue;const v=mine(d.id)?.verdict;if(v=="ok")ok++;else if(v=="flag")fl++}
+ const total=pool.length,n=total||1,any=items.filter(d=>flaggers(d.id).length).length;
+ $("stats").textContent=`You: ${ok+fl} of ${total}${HASCHOSEN?" chosen":""} reviewed. Everyone: ${any} flagged.`;
+ $("pOk").style.width=ok/n*100+"%";$("pFlag").style.width=fl/n*100+"%";
+}
+// Filters for reviewers' own actions always show. Filters that depend on fields in the data show when they match.
+const ALWAYS=new Set(["updated","flag","mine","split","send","ok","all"]);
+function fillFilters(){
+ const shown=Object.entries(FILTERS).map(([k,[n,f]])=>[k,typeof n=="function"?n():n,items.filter(f).length]).filter(([k,,c])=>c||ALWAYS.has(k));
+ // Keep the current filter while it still shows. One that ran out of matches falls back to the default.
+ const keys=new Set(shown.map(([k])=>k)),cur=$("filter").value;
+ const v=keys.has(cur)?cur:keys.has("roster")?"roster":"all";
+ $("filter").innerHTML=shown.map(([k,n,c])=>`<option value="${k}">${esc(n)} (${c})</option>`).join("");
+ $("filter").value=v;
+ if(cur&&v!=cur){compute();goPage(0)}
+}
+// Trait chips under the header. Each removes its trait; several traits must all match.
+function paintTChips(){
+ const e=Object.entries(TR);$("tchips").style.display=e.length?"flex":"none";
+ $("tchips").innerHTML=`<span class="meta">Only ${esc(CFG.nouns)} with:</span>`+e.map(([k,v])=>`<button data-k="${esc(k)}" title="Remove this trait">${esc(k)}: ${esc(v)} &#10005;</button>`).join("")+(e.length>1?`<button class="plain" data-all="1">Clear all traits</button>`:"");
+}
+function setTraits(next){TR=next;paintTChips();compute();goPage(0);saveState()}
+function goPage(p){page=Math.max(0,Math.min(pages()-1,p));cur=0;render();scrollTo(0,0)}
+async function pageGood(){
+ const now=Math.floor(Date.now()/1000);
+ const batch=pageItems().filter(d=>mine(d.id)?.verdict!="flag"||stale(d.id)).map(d=>({id:d.id,by:ME,verdict:"ok",reasons:[],note:"",at:now}));
+ try{if(batch.length)await post(batch)}catch{return}
+ for(const b of batch)(ALL[b.id]??={})[ME]=b;
+ const f=$("filter").value;
+ if(f=="todo"){compute();fillFilters();goPage(page)}else if(page>=pages()-1){fillFilters();render()}else{fillFilters();goPage(page+1)}
+}
+function openDetail(id,seq=null){DSEQ=seq;
+ const d=byId[id];dLayer="combined";const v=mine(id);dReasons=new Set(v?.reasons||[]);
+ $("note").value=v?.note||"";$("stage").classList.remove("zoom");
+ $("dtitle").textContent=CFG.noun+" "+id;$("detail").dataset.id=id;$("detail").classList.add("open");
+ paintDetail();
+}
+function paintDetail(){
+ const id=$("detail").dataset.id,d=byId[id];
+ $("dimg").src=fullUrl(d,dLayer);
+ $("layers").innerHTML=["combined","character","background"].map(l=>`<button data-l="${l}" class="${l==dLayer?"on":""}">${l[0].toUpperCase()+l.slice(1)}</button>`).join("");
+ $("reasons").innerHTML=REASONS.map(r=>`<button data-r="${r}" class="${dReasons.has(r)?"on":""}">${r}</button>`).join("");
+ const v=mine(id);
+ const others=Object.values(ALL[id]||{}).filter(r=>r.by!=ME&&r.verdict!="clear");
+ const warn=[UPD[id]?`Updated by the artist in ${UPD[id].tag} (${(UPD[id].kinds||[]).join(", ")}).${stale(id)?" Your last review was before this.":""}`:"",HASCHOSEN&&!d.mint?CFG.others+".":"",d.prov?"Background is provisional, not final approval.":"",d.cleanup?"Effect cleanup: the character differs from the source.":"",(d.clip||[]).length?"Figure reaches the "+d.clip.join(", ")+" edge.":"",d.diff>MISMATCH?`Combined differs from its layers (${d.diff}).`:"",d.errors?"File error: "+d.errors:""].filter(Boolean);
+ $("dmeta").innerHTML=(d.mint?`<p style="color:var(--accent)"><b style="color:inherit">&#9733; ${esc(CFG.chosen)}</b></p>`:"")+(isArtist()?"":`<p><b>Your review:</b> ${v&&v.verdict!="clear"?v.verdict:"not reviewed"}</p>`)+others.map(r=>`<p><b>${esc(r.by)}:</b> ${esc(r.verdict)}${r.reasons?.length?" ("+esc(r.reasons.join(", "))+")":""}${r.note?" "+esc(r.note):""}</p>`).join("")+(TRIAGE[id]?.status?`<p><b>Fix list:</b> ${esc(TRIAGE[id].status)}</p>`:"")+warn.map(w=>`<p class="warn">${esc(w)}</p>`).join("")+
+  ((d.twins||[]).length?`<p><b>Same traits as:</b> ${d.twins.filter(t=>byId[t]).map(t=>`<a href="#" data-go="${t}" style="color:var(--accent)">${t}</a>`).join(", ")}</p>`:"")+
+  (d.name?`<p><b>${esc(d.name)}</b>${d.animated?" (animated)":""}</p>`:"")+(Object.keys(d.traits||{}).length?`<p style="margin:0 0 4px">Tap a trait to show only ${esc(CFG.nouns)} with it:</p>`:"")+`<div class="chips traits">${Object.entries(d.traits||{}).map(([k,v])=>`<button data-tk="${esc(k)}" data-tv="${esc(v)}" class="${TR[k]==v?"on":""}">${esc(k)}: ${esc(v)}<i>${TCOUNT[k+"\u0000"+v]||0}</i></button>`).join("")}</div>`+(d.amend?`<p><b>Roster change:</b> ${esc(d.amend)}</p>`:"")+
+  // Each fact shows only when the data has it.
+  `<p>`+[["Delivery note",d.qc],["Size",d.size],["Readability score",d.contrast],["Figure fills",d.coverage==null?null:(d.coverage*100).toFixed(0)+"%"],["Background source",d.src],["Background review",d.scope]].filter(([,x])=>x!=null&&x!=="").map(([k,x])=>`<b>${k}:</b> ${esc(x)}`).join("<br>")+`</p>`;
+}
+function step(n){
+ const id=$("detail").dataset.id;
+ // Opened from the artist list: the arrows walk that list, not the grid.
+ if(DSEQ){const nx=DSEQ[DSEQ.indexOf(id)+n];if(nx)openDetail(nx,DSEQ);return}
+ const i=list.findIndex(d=>d.id==id),nx=list[i+n];if(!nx)return;page=Math.floor((i+n)/PAGE);cur=(i+n)%PAGE;render();openDetail(nx.id)}
+function close(){$("detail").classList.remove("open");$("dimg").src="";DSEQ=null}
+const stOf=id=>TRIAGE[id]?.status||"";
+const ATABS={send:["Sent to you",id=>stOf(id)=="send"],open:["All open flags",id=>stOf(id)=="send"||stOf(id)==""],fixed:["Fixed",id=>stOf(id)=="fixed"]};
+function artistRows(tab){
+ const noted=$("artnotes").checked;
+ return items.filter(d=>flaggers(d.id).length&&ATABS[tab][1](d.id)&&(!noted||flaggers(d.id).some(r=>r.note)))
+  .sort((a,b)=>(b.mint-a.mint)||(flaggers(b.id).length-flaggers(a.id).length)||a.id.localeCompare(b.id));
+}
+function openArtist(){
+ const n=t=>artistRows(t).length;
+ if(!ATAB)ATAB=n("send")?"send":"open";
+ $("arttabs").innerHTML=Object.entries(ATABS).map(([k,[t]])=>`<button data-t="${k}" class="${k==ATAB?"on":""}">${t} (${n(k)})</button>`).join("");
+ $("artcsv").href=ATAB=="send"?"/artist.csv":"/flagged.csv";
+ AROWS=artistRows(ATAB);ASHOW=0;$("artrows").innerHTML="";
+ const kept=items.filter(d=>flaggers(d.id).length&&stOf(d.id)=="keep").length;
+ $("artsum").textContent=`${AROWS.length} ${CFG.nouns}. ${HASCHOSEN?"Chosen ones come first, then":"First come"} the ones that more people flagged.`+(kept?` The team decided to keep ${kept} flagged ${CFG.nouns} as they are, so this list leaves them out.`:"");
+ moreArtist();$("artlist").classList.add("open");
+}
+function artRow(d){
+ const st=stOf(d.id),badge=st=="send"?`<span class="badge send">Sent to you</span>`:st=="fixed"?`<span class="badge fixed">Fixed</span>`:`<span class="badge open">Under review</span>`;
+ return `<div class="fix art" data-id="${d.id}"><img loading="lazy" src="${thumbUrl(d,"combined")}" alt="${esc(CFG.noun)} ${d.id}" data-open="1"><div><p><b>${esc(CFG.noun)} ${d.id}</b>${badge}</p><p class="meta">${HASCHOSEN?(d.mint?"&#9733; "+esc(CFG.chosen):esc(CFG.others))+". ":""}File: Images/ID${d.id}/${d.id}__combined.png</p><p><b>Flagged by</b> ${esc(flaggers(d.id).map(r=>r.by).join(", "))}</p>${flaggers(d.id).filter(r=>r.note||r.reasons?.length).map(r=>`<p><b>${esc(r.by)}:</b> ${esc([(r.reasons||[]).join(", "),r.note].filter(Boolean).join(". "))}</p>`).join("")}${UPD[d.id]?`<p class="warn">You updated it in ${esc(UPD[d.id].tag)}.</p>`:""}</div></div>`;
+}
+function moreArtist(){
+ const next=AROWS.slice(ASHOW,ASHOW+ASTEP);ASHOW+=next.length;
+ $("artrows").insertAdjacentHTML("beforeend",next.map(artRow).join("")||(ASHOW?"":"<p>Nothing here.</p>"));
+ $("artmore").style.display=ASHOW<AROWS.length?"":"none";$("artmore").textContent=`Show more (${AROWS.length-ASHOW} left)`;
+}
+async function init(){
+ const r=await(await fetch("/data")).json();// Every ID goes into markup and URLs unescaped, so the page keeps only the five-digit IDs that the whole system uses.
+ items=(Array.isArray(r.items)?r.items:r.items.items).filter(d=>/^\d{5}$/.test(d.id));ALL=r.verdicts;TRIAGE=r.triage;
+ UPD={...r.updates};for(const d of items)if(d.upd)UPD[d.id]=d.upd;
+ CFG={...CFG,...r.config};HASCHOSEN=items.some(d=>d.mint);applyConfig();byId=Object.fromEntries(items.map(d=>[d.id,d]));
+ for(const d of items)for(const [k,v] of Object.entries(d.traits||{}))TCOUNT[k+"\u0000"+v]=(TCOUNT[k+"\u0000"+v]||0)+1;
+ fillFilters();
+ const types=[...new Set(items.map(d=>d.type).filter(Boolean))].sort();
+ $("type").style.display=types.length?"":"none";
+ $("type").innerHTML=`<option value="">All types</option>`+types.map(t=>`<option>${esc(t)}</option>`).join("");
+ const s=state();if(s.f&&FILTERS[s.f])$("filter").value=s.f;if(s.ty!=null)$("type").value=s.ty;if(s.s)$("sort").value=s.s;if(s.v)$("view").value=s.v;if(s.t){$("tile").value=s.t;document.documentElement.style.setProperty("--tile",s.t+"px")}
+ if(s.tr&&typeof s.tr=="object")TR=s.tr;paintTChips();
+ // A hosted login sets the reviewer. Only the local server asks for a name.
+ ME=r.me||s.me||"";document.body.classList.toggle("artist",isArtist());fillFilters();compute();page=s.page||0;render();
+ if(ME)$("whobtn").textContent=ME;else askWho();
+ if(r.me)$("whobtn").disabled=true;
+ if(isArtist()||location.hash=="#artist")openArtist();
+}
+function askWho(){
+ $("whoknown").innerHTML=[...new Set(Object.values(ALL).flatMap(o=>Object.keys(o)))].map(n=>`<option value="${esc(n)}">`).join("");
+ $("whoname").value=ME;$("whoask").classList.add("open");$("whoname").focus();
+}
+$("whobtn").onclick=askWho;
+$("whoform").onsubmit=e=>{e.preventDefault();const n=$("whoname").value.trim();if(!n)return;ME=n;document.body.classList.toggle("artist",isArtist());$("whobtn").textContent=ME;$("whoask").classList.remove("open");fillFilters();compute();render()};
+function paintFixes(){
+ const rows=items.filter(d=>flaggers(d.id).length),rank={"":0,send:1,keep:2,fixed:3},st=id=>TRIAGE[id]?.status||"";
+ // Art that came back for an item marked "Send to artist" waits for a decision, so it goes first.
+ const back=id=>st(id)=="send"&&!!UPD[id]&&UPD[id].at>=(TRIAGE[id].at||0);
+ rows.sort((a,b)=>back(b.id)-back(a.id)||rank[st(a.id)]-rank[st(b.id)]||a.id.localeCompare(b.id));
+ const n=s=>rows.filter(d=>st(d.id)==s).length;
+ $("fixsum").textContent=`${rows.length} flagged: ${n("")} to decide, ${n("send")} going to the artist, ${n("keep")} kept as they are, ${n("fixed")} fixed.`;
+ $("fixrows").innerHTML=rows.map(d=>`<div class="fix" data-id="${d.id}"><img loading="lazy" src="${thumbUrl(d,"combined")}" alt="${esc(CFG.noun)} ${d.id}" data-open="1"><div><p><b>${d.id}</b>${!HASCHOSEN?"":d.mint?" &#9733;":` (${esc(CFG.othersTag)})`}${UPD[d.id]?` <span class="warn">Updated in ${esc(UPD[d.id].tag)}${back(d.id)?". Check it, then mark it Fixed.":""}</span>`:""}</p>${flaggers(d.id).map(r=>`<p><b>${esc(r.by)}:</b> ${esc((r.reasons||[]).join(", ")||"flagged")}${r.note?". "+esc(r.note):""}</p>`).join("")}<div class="row">${[["send","Send to artist"],["keep","Keep as is"],["fixed","Fixed"]].map(([s,t])=>`<button data-s="${s}" class="${st(d.id)==s?"on":""}">${t}</button>`).join("")}</div></div></div>`).join("")||"<p>Nothing is flagged yet.</p>";
+}
+$("artbtn").onclick=openArtist;
+$("artclose").onclick=()=>$("artlist").classList.remove("open");
+$("arttabs").onclick=e=>{const t=e.target.dataset.t;if(t){ATAB=t;openArtist()}};
+$("artnotes").onchange=openArtist;
+$("artmore").onclick=moreArtist;
+$("artrows").onclick=e=>{const row=e.target.closest(".fix");if(row)openDetail(row.dataset.id,AROWS.map(d=>d.id))};
+$("fixbtn").onclick=()=>{paintFixes();$("fixes").classList.add("open")};
+$("fixclose").onclick=()=>{$("fixes").classList.remove("open");fillFilters();render()};
+$("fixrows").onclick=async e=>{
+ const row=e.target.closest(".fix");if(!row)return;const id=row.dataset.id;
+ if(e.target.dataset.open){$("fixes").classList.remove("open");return openDetail(id)}
+ const s=e.target.dataset.s;if(!s)return;
+ const status=TRIAGE[id]?.status==s?"":s;
+ try{await post([{id,status}],"/triage")}catch{return}
+ TRIAGE[id]={id,status,by:ME,at:Math.floor(Date.now()/1000)};paintFixes();
+};
+$("filter").onchange=$("sort").onchange=$("type").onchange=()=>{compute();goPage(0);saveState()};
+$("view").onchange=render;
+$("tile").onchange=e=>{document.documentElement.style.setProperty("--tile",e.target.value+"px");saveState()};
+$("jump").onchange=e=>{const id=e.target.value.trim().padStart(5,"0");if(byId[id])openDetail(id);else toast(`No ${CFG.noun.toLowerCase()} `+e.target.value);e.target.value=""};
+$("prev").onclick=()=>goPage(page-1);$("next").onclick=()=>goPage(page+1);$("good").onclick=pageGood;
+$("grid").onclick=e=>{
+ const t=e.target.closest(".tile");if(!t)return;
+ if(!e.target.closest(".fl"))return openDetail(t.dataset.id);
+ setV(t.dataset.id,mine(t.dataset.id)?.verdict=="flag"?"clear":"flag",[],"");
+};
+$("dclose").onclick=close;$("dprev").onclick=()=>step(-1);$("dnext").onclick=()=>step(1);
+$("stage").onclick=()=>$("stage").classList.toggle("zoom");
+$("layers").onclick=e=>{if(e.target.dataset.l){dLayer=e.target.dataset.l;paintDetail()}};
+$("reasons").onclick=e=>{const r=e.target.dataset.r;if(r){dReasons.has(r)?dReasons.delete(r):dReasons.add(r);paintDetail()}};
+$("dmeta").onclick=e=>{
+ const t=e.target.closest("[data-tk]");
+ if(t){const k=t.dataset.tk,v=t.dataset.tv,next={...TR};next[k]==v?delete next[k]:next[k]=v;close();return setTraits(next)}
+ const g=e.target.dataset.go;if(g){e.preventDefault();openDetail(g)}
+};
+$("tchips").onclick=e=>{const b=e.target.closest("button");if(!b)return;if(b.dataset.all)return setTraits({});const next={...TR};delete next[b.dataset.k];setTraits(next)};
+const dSave=async(verdict)=>{const id=$("detail").dataset.id;await setV(id,verdict,verdict=="flag"?[...dReasons]:[],verdict=="clear"?"":$("note").value);fillFilters();verdict=="clear"?paintDetail():step(1)};
+$("dok").onclick=()=>dSave("ok");$("dflag").onclick=()=>dSave("flag");$("dclear").onclick=()=>{dReasons.clear();$("note").value="";dSave("clear")};
+document.onkeydown=e=>{
+ if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;
+ const open=$("detail").classList.contains("open");
+ if(open){if(e.key=="Escape")close();if(e.key=="ArrowRight")step(1);if(e.key=="ArrowLeft")step(-1);if(isArtist())return;if(e.key=="f")dSave("flag");if(e.key=="o")dSave("ok");return}
+ if(isArtist()&&e.key!="Enter"&&!e.key.startsWith("Arrow"))return;
+ const n=pageItems().length,cols=getComputedStyle($("grid")).gridTemplateColumns.split(" ").length;
+ const mv={ArrowRight:1,ArrowLeft:-1,ArrowDown:cols,ArrowUp:-cols}[e.key];
+ if(mv){e.preventDefault();cur=Math.max(0,Math.min(n-1,cur+mv));document.querySelectorAll(".tile").forEach((t,i)=>{t.classList.toggle("cur",i==cur);if(i==cur)t.scrollIntoView({block:"nearest"})})}
+ const d=pageItems()[cur];if(!d)return;
+ if(e.key=="f"){setV(d.id,mine(d.id)?.verdict=="flag"?"clear":"flag");}
+ if(e.key=="Enter")openDetail(d.id);
+ if(e.key=="n")pageGood();
+};
+init();
+</script></body></html>

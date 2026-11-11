@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS reviews (
+  id TEXT NOT NULL,
+  by_name TEXT NOT NULL,
+  verdict TEXT NOT NULL,
+  reasons TEXT NOT NULL DEFAULT '[]',
+  note TEXT NOT NULL DEFAULT '',
+  at INTEGER NOT NULL,
+  PRIMARY KEY (id, by_name)
+);
+CREATE TABLE IF NOT EXISTS updates (
+  id TEXT PRIMARY KEY,
+  tag TEXT NOT NULL,
+  kinds TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS triage (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  by_name TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
