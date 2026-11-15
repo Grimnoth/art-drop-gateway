@@ -142,3 +142,13 @@ test("the filter, tile, detail, fix list and artist view show pending re-review"
   assert.match(g.node("fixrows").innerHTML, /Needs re-review/);
   assert.match(g.run('artRow(byId["00001"])'), /Awaiting re-review/);
 });
+
+
+test("opening the next artwork starts at its top after a long mobile review", () => {
+  const g = gallery();
+  g.run('openDetail("00001")');
+  g.node("detail").scrollTop = 900;
+  g.run('step(1)');
+  assert.equal(g.node("detail").dataset.id,"00002");
+  assert.equal(g.node("detail").scrollTop,0,"the next artwork is hidden above the previous item's scroll position");
+});
