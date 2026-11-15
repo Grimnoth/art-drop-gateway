@@ -11,7 +11,7 @@ try { ({ reviewStatus } = await import("./review-state.mjs")); } catch (e) {
   if (e.code !== "ERR_MODULE_NOT_FOUND") throw e;
 }
 
-function gallery() {
+function gallery({ failSave = false } = {}) {
   const nodes = new Map(), writes = [];
   const node = (id) => {
     if (!nodes.has(id)) {
@@ -23,7 +23,7 @@ function gallery() {
   };
   const context = vm.createContext({ reviewStatus, document: { getElementById: node, querySelector: () => null },
     localStorage: { getItem: () => "{}", setItem() {} }, scrollTo() {}, setTimeout() {},
-    fetch: async (path, options) => { writes.push({ path, body: JSON.parse(options.body) }); return { ok: true }; } });
+    fetch: async (path, options) => { writes.push({ path, body: JSON.parse(options.body) }); return { ok: !failSave, status: failSave ? 503 : 200 }; } });
   vm.runInContext(script, context);
   vm.runInContext(`ME="Ada"; items=[{id:"00001"},{id:"00002"},{id:"00003"}];
     byId=Object.fromEntries(items.map(d=>[d.id,d])); list=items;
@@ -81,6 +81,28 @@ test("bulk page approval preserves old flagged art and its note", async () => {
   assert.equal(g.run('mine("00003").verdict'), "ok");
 });
 
+test("saving a re-review removes the completed item from its queue and closes the last detail", async () => {
+  const g = gallery();
+  g.node("filter").value = "rereview";
+  g.run('compute(); openDetail("00001")');
+  assert.equal(g.run("list.length"), 1);
+  await g.run('dSave("flag")');
+  assert.equal(g.run("list.length"), 0);
+  assert.equal(g.node("detail").classList.contains("open"), false);
+  assert.match(g.node("pageinfo").textContent, /0 items/);
+});
+
+test("a failed flag update preserves the pending flag and does not advance to another item", async () => {
+  const g = gallery({ failSave: true });
+  g.node("filter").value = "rereview";
+  g.run('UPD["00002"]={tag:"new-delivery",at:10}; compute(); openDetail("00001")');
+  g.node("note").value = "Edited concern";
+  await g.run('dSave("flag")');
+  assert.equal(g.node("detail").dataset.id, "00001");
+  assert.equal(g.run('mine("00001").note'), "Check the wing");
+  assert.equal(g.run('needsReReview("00001")'), true);
+});
+
 test("the filter, tile, detail, fix list and artist view show pending re-review", () => {
   const g = gallery();
   assert.equal(g.run('!!FILTERS.rereview'), true);
@@ -89,6 +111,7 @@ test("the filter, tile, detail, fix list and artist view show pending re-review"
   g.run('openDetail("00001")');
   assert.equal(g.node("note").value, "Check the wing");
   assert.match(g.node("dmeta").innerHTML, /re-review/i);
+  assert.doesNotMatch(g.node("dmeta").innerHTML, /Fix list:<\/b> fixed/);
   g.run("paintFixes()");
   assert.match(g.node("fixsum").textContent, /1.*re-review/i);
   assert.match(g.node("fixrows").innerHTML, /Needs re-review/);
