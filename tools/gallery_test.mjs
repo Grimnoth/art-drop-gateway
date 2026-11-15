@@ -79,6 +79,15 @@ test("a timestamp after publication cannot acknowledge art that was reviewed in 
   assert.equal(g.run('stale("00001")'), true);
 });
 
+test("reapplying the same triage choice after an art change applies it on the first click", async () => {
+  const g = gallery();
+  await g.run('setV("00001","flag",[],"Still needs work")');
+  assert.equal(g.run('stOf("00001")'), "");
+  g.run('globalThis.triageEvent={target:{closest:()=>({dataset:{id:"00001"}}),dataset:{s:"fixed"}}}');
+  await g.node("fixrows").onclick(g.run("triageEvent"));
+  assert.equal(g.writes.at(-1).body[0].status,"fixed");
+});
+
 test("bulk page approval preserves old flagged art and its note", async () => {
   const g = gallery();
   await g.run("pageGood()");
@@ -108,6 +117,15 @@ test("a failed flag update preserves the pending flag and does not advance to an
   assert.equal(g.node("detail").dataset.id, "00001");
   assert.equal(g.run('mine("00001").note'), "Check the wing");
   assert.equal(g.run('needsReReview("00001")'), true);
+});
+
+test("a failed flag removal preserves the original note and selected reasons for retry", async () => {
+  const g = gallery({ failSave: true });
+  g.run('openDetail("00001")');
+  await g.node("dclear").onclick();
+  assert.equal(g.node("note").value,"Check the wing");
+  assert.equal(g.run('dReasons.has("Edge halo")'),true);
+  assert.equal(g.run('mine("00001").verdict'),"flag");
 });
 
 test("the filter, tile, detail, fix list and artist view show pending re-review", () => {

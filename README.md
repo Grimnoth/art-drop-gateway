@@ -17,7 +17,8 @@ gives the artist a clean list of the flags, and publishes each new release by it
   Every reviewer with an old flag must revisit it. Bulk page approval leaves flags alone. The fix list,
   artist view and CSV exports use the same state; pending re-reviews are not sent back to the artist.
   Each review records the art version it was made against, so a tab showing older art cannot acknowledge a
-  newer version just by saving later.
+  newer version just by saving later. Saves also check the gallery's catalog version and ask stale tabs to
+  reload before changing any reviews or fix-list decisions.
 - **The update:** `tools/pull_update.py` compares the artist's latest release with the site by checksum,
   downloads only the ZIPs that changed, and publishes only the changed items.
 

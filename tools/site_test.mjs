@@ -2,7 +2,7 @@
 // Run from site/: node ../tools/site_test.mjs   (WRANGLER names the wrangler command; default: wrangler)
 // It uses wrangler.example.toml and made-up data, so it needs no deployment of its own.
 import { spawn, execFileSync } from "node:child_process";
-import { writeFileSync, rmSync, mkdtempSync, mkdirSync, copyFileSync } from "node:fs";
+import { readFileSync, writeFileSync, rmSync, mkdtempSync, mkdirSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
@@ -13,9 +13,10 @@ const CONFIG = ["--config", "wrangler.example.toml"];
 const ITEMS = 50;
 const BASE = "http://127.0.0.1:8799";
 const PW = "test-password:with-colon";
+let catalogVersion = "";
 const basic = (name, pw) => `Basic ${Buffer.from(`${name}:${pw}`).toString("base64")}`;
 const get = (path, auth, init = {}) => fetch(BASE + path, { redirect: "manual", signal: AbortSignal.timeout(15000), ...init, headers: { ...(auth ? { Authorization: auth } : {}), ...init.headers } });
-const post = (path, auth, body, origin = BASE) => get(path, auth, { method: "POST", body: JSON.stringify(body), headers: { Origin: origin } });
+const post = (path, auth, body, origin = BASE) => get(path, auth, { method: "POST", body: JSON.stringify(body.map(r=>({...r,catalog_version:catalogVersion}))), headers: { Origin: origin } });
 
 const state = mkdtempSync(join(tmpdir(), "gateway-site-test-"));
 writeFileSync(".dev.vars", `REVIEW_PASSWORD="${PW}"\nALLOW_HTTP="1"\n`);
@@ -43,6 +44,7 @@ let failed = 0;
 const test = async (name, fn) => { try { await fn(); console.log("ok  ", name); } catch (e) { failed++; console.log("FAIL", name, e.message); } };
 try {
   for (let i = 0; i < 60; i++) { try { await get("/"); break; } catch { await new Promise((r) => setTimeout(r, 500)); } }
+  catalogVersion = (await (await get("/data", basic("Ada", PW))).json()).catalog_version;
 
   await test("the schema upgrade preserves existing reviews and is safe to repeat", async () => {
     const legacy = join(state, "legacy-upgrade");
@@ -156,6 +158,33 @@ try {
     assert.doesNotMatch(after.split(/\r?\n/).find((s) => s.startsWith("00010,")), /needs re-review/);
     await post("/verdict", ada, [{ id: "00010", verdict: "clear" }]);
     assert.doesNotMatch(await (await get("/flagged.csv", ada)).text(), /00010/);
+  });
+  await test("a stale gallery cannot clear an existing flag or change triage after publication", async () => {
+    await post("/verdict", ada, [{id:"00011",verdict:"flag",note:"Keep until re-reviewed"}]);
+    const next = JSON.parse(readFileSync(items, "utf8"));
+    next.find(d=>d.id==="00011").upd={tag:"after-tab",kinds:["character"],at:10};
+    writeFileSync(items, JSON.stringify(next));
+    wr("r2","object","put","art-drop-gateway/meta/items.json","--local","--file",items);
+    const save = (path,body) => get(path,ada,{method:"POST",body:JSON.stringify(body),headers:{Origin:BASE}});
+    assert.equal((await save("/verdict",[{id:"00011",verdict:"ok",catalog_version:catalogVersion,art_version:""}])).status,409);
+    assert.equal((await save("/triage",[{id:"00011",status:"fixed",catalog_version:catalogVersion}])).status,409);
+    assert.equal((await save("/verdict",[{id:"00011",verdict:"clear"}])).status,409);
+    const current=await (await get("/data",ada)).json();
+    assert.equal(current.verdicts["00011"].Ada.verdict,"flag");
+    assert.equal(current.verdicts["00011"].Ada.note,"Keep until re-reviewed");
+    assert.equal(current.triage["00011"],undefined);
+    assert.notEqual(current.catalog_version,catalogVersion);
+    catalogVersion=current.catalog_version;
+    assert.equal((await post("/verdict",ada,[{id:"00011",verdict:"flag",note:"Checked current art",art_version:"after-tab:10"}])).status,200);
+  });
+  await test("the review API serves a complete collection larger than one D1 value", async () => {
+    wr("d1","execute","DB","--local","--command", "WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM ids WHERE n<4000) INSERT INTO reviews(id,by_name,verdict,reasons,note,at,art_version) SELECT printf('%05d',n),'LoadFixture','flag','[]',printf('%0500d',0),1,'delivery-fixture:1900000000' FROM ids");
+    const r=await get("/data",ada);
+    assert.equal(r.status,200);
+    const data=await r.json();
+    assert.ok(Buffer.byteLength(JSON.stringify(data.verdicts))>2*1024*1024);
+    assert.equal(Object.values(data.verdicts).filter(v=>v.LoadFixture).length,4000);
+    assert.equal(data.verdicts["04000"].LoadFixture.note.length,500);
   });
 } finally {
   dev.kill("SIGTERM"); rmSync(".dev.vars", { force: true }); rmSync(state, { recursive: true, force: true });

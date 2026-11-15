@@ -149,7 +149,7 @@ const PAGE=60, REASONS=["Character damaged","Edge halo","Cut off","Background cl
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 let TR={},TCOUNT={};
-let items=[],byId={},ALL={},TRIAGE={},UPD={},ME="",list=[],page=0,cur=0,dLayer="combined",dReasons=new Set();
+let items=[],byId={},ALL={},TRIAGE={},UPD={},ME="",CATALOG="",list=[],page=0,cur=0,dLayer="combined",dReasons=new Set();
 // The artist reads flags and does not review. The name comes from the login.
 // Display words come from the Worker's settings (wrangler.toml [vars]), so one page serves any project.
 let CFG={title:"Art Review",noun:"Item",nouns:"items",artist:"Artist",chosen:"Chosen",others:"Not chosen",othersTag:"N"},HASCHOSEN=false;
@@ -201,7 +201,7 @@ const hash=(id)=>{let h=2166136261;for(const c of id)h=Math.imul(h^c.charCodeAt(
 function state(){try{return JSON.parse(localStorage.getItem("bw")||"{}")}catch{return{}}}
 function saveState(){try{localStorage.setItem("bw",JSON.stringify({me:ME,f:$("filter").value,ty:$("type").value,s:$("sort").value,v:$("view").value,t:$("tile").value,tr:TR,page}))}catch{}}
 async function post(batch,path="/verdict"){
- try{const r=await fetch(path,{method:"POST",body:JSON.stringify(batch.map(b=>({...b,by:ME})))});if(!r.ok)throw new Error(r.status);}
+ try{const r=await fetch(path,{method:"POST",body:JSON.stringify(batch.map(b=>({...b,by:ME,catalog_version:CATALOG})))});if(!r.ok)throw new Error(r.status==409?"The art changed. Reload the gallery before saving":r.status);}
  catch(e){toast("Not saved: "+e.message+". Check the server.");throw e}
 }
 function toast(t){$("toast").textContent=t;$("toast").style.display="block";setTimeout(()=>$("toast").style.display="none",5000)}
@@ -324,7 +324,7 @@ function moreArtist(){
 }
 async function init(){
  const r=await(await fetch("/data")).json();// Every ID goes into markup and URLs unescaped, so the page keeps only the five-digit IDs that the whole system uses.
- items=(Array.isArray(r.items)?r.items:r.items.items).filter(d=>/^\d{5}$/.test(d.id));ALL=r.verdicts;TRIAGE=r.triage;
+ items=(Array.isArray(r.items)?r.items:r.items.items).filter(d=>/^\d{5}$/.test(d.id));ALL=r.verdicts;TRIAGE=r.triage;CATALOG=r.catalog_version;
  UPD={...r.updates};for(const d of items)if(d.upd)UPD[d.id]=d.upd;
  CFG={...CFG,...r.config};HASCHOSEN=items.some(d=>d.mint);applyConfig();byId=Object.fromEntries(items.map(d=>[d.id,d]));
  for(const d of items)for(const [k,v] of Object.entries(d.traits||{}))TCOUNT[k+"\u0000"+v]=(TCOUNT[k+"\u0000"+v]||0)+1;
@@ -365,7 +365,7 @@ $("fixrows").onclick=async e=>{
  const row=e.target.closest(".fix");if(!row)return;const id=row.dataset.id;
  if(e.target.dataset.open){$("fixes").classList.remove("open");return openDetail(id)}
  const s=e.target.dataset.s;if(!s)return;
- const status=TRIAGE[id]?.status==s?"":s;
+ const status=stOf(id)==s?"":s;
  try{await post([{id,status}],"/triage")}catch{return}
  TRIAGE[id]={id,status,by:ME,at:Math.floor(Date.now()/1000)};paintFixes();
 };
@@ -392,13 +392,13 @@ $("tchips").onclick=e=>{const b=e.target.closest("button");if(!b)return;if(b.dat
 const dSave=async(verdict)=>{
  const id=$("detail").dataset.id,index=list.findIndex(d=>d.id==id);
  if(!await setV(id,verdict,verdict=="flag"?[...dReasons]:[],verdict=="clear"?"":$("note").value))return;
+ if(verdict=="clear"){dReasons.clear();$("note").value="";paintDetail();return}
  paintDetail();
- if(verdict=="clear")return;
  if(DSEQ||list.some(d=>d.id==id))return step(1);
  const next=list[Math.min(Math.max(index,0),list.length-1)];
  next?openDetail(next.id):close();
 };
-$("dok").onclick=()=>dSave("ok");$("dflag").onclick=()=>dSave("flag");$("dclear").onclick=()=>{dReasons.clear();$("note").value="";dSave("clear")};
+$("dok").onclick=()=>dSave("ok");$("dflag").onclick=()=>dSave("flag");$("dclear").onclick=()=>dSave("clear");
 document.onkeydown=e=>{
  if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;
  const open=$("detail").classList.contains("open");

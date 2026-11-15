@@ -45,9 +45,8 @@ async function object(req, env, key, type) {
   return new Response(obj.body ?? null, { status: obj.body ? 200 : 304, headers });
 }
 
-const VERDICTS_SQL = `SELECT COALESCE(json_group_object(id, json(people)), '{}') AS j FROM (
-  SELECT id, json_group_object(by_name, json_object('id', id, 'by', by_name, 'verdict', verdict, 'reasons', json(reasons), 'note', note, 'art_version', art_version, 'at', at)) AS people
-  FROM reviews GROUP BY id)`;
+const VERDICTS_SQL = `SELECT id, json_group_object(by_name, json_object('id', id, 'by', by_name, 'verdict', verdict, 'reasons', json(reasons), 'note', note, 'art_version', art_version, 'at', at)) AS people
+  FROM reviews GROUP BY id`;
 const TRIAGE_SQL = `SELECT COALESCE(json_group_object(id, json_object('id', id, 'status', status, 'by', by_name, 'at', at)), '{}') AS j FROM triage`;
 
 const UPDATES_SQL = `SELECT COALESCE(json_group_object(id, json_object('tag', tag, 'kinds', json(kinds), 'at', at)), '{}') AS j FROM updates`;
@@ -64,8 +63,10 @@ async function data(env, name) {
   if (!obj) throw new Error("meta/items.json is missing");
   const items = await obj.text();
   const [v, t, u] = await env.DB.batch([env.DB.prepare(VERDICTS_SQL), env.DB.prepare(TRIAGE_SQL), env.DB.prepare(UPDATES_SQL)]);
+  // A collection can exceed D1's single-value limit; each item's reviewers remain one bounded value.
+  const verdicts = v.results.map((r) => `${JSON.stringify(r.id)}:${r.people}`).join(",");
   // Joined as text so that the Worker does not parse 5 MB of JSON on each load.
-  return json(`{"me":${JSON.stringify(name)},"config":${JSON.stringify(config(env))},"items":${items},"verdicts":${v.results[0].j},"triage":${t.results[0].j},"updates":${u.results[0].j}}`);
+  return json(`{"me":${JSON.stringify(name)},"catalog_version":${JSON.stringify(obj.httpEtag)},"config":${JSON.stringify(config(env))},"items":${items},"verdicts":{${verdicts}},"triage":${t.results[0].j},"updates":${u.results[0].j}}`);
 }
 
 async function save(req, env, path, name) {
@@ -77,6 +78,9 @@ async function save(req, env, path, name) {
   } catch (e) {
     return json(JSON.stringify({ error: e.message }), 400);
   }
+  const catalog = await env.ART.head("meta/items.json");
+  if (!catalog) return text("Art catalog unavailable.", 503);
+  if (batch.some((r) => r?.catalog_version !== catalog.httpEtag)) return json('{"error":"Art changed. Reload the gallery before saving."}', 409);
   const at = Math.floor(Date.now() / 1000);
   const stmts = [];
   for (const r of batch) {
