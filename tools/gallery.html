@@ -47,6 +47,12 @@ nav{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:cente
 #stage{align-self:start;position:relative;background:repeating-conic-gradient(#3a3d45 0 25%,#262830 0 50%) 0 0/24px 24px;border-radius:8px;overflow:auto;max-height:calc(100vh - 80px)}
 #stage img{display:block;width:100%}
 #stage.zoom img{width:auto;max-width:none}
+.detailbar{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.detailbar h2{margin:0;font-size:18px}
+#tools{margin-top:8px}#tools summary,#reviewinfo summary{cursor:pointer;color:var(--dim);padding:8px 0}
+#tools .row{padding:6px 0}
+#dstatus:empty{display:none}
+html:has(#detail.open){overflow:hidden}
 .side{display:flex;flex-direction:column;gap:10px}
 .side h2{margin:0;font-size:20px}
 .meta{color:var(--dim);font-size:13px;word-break:break-word}
@@ -76,11 +82,69 @@ textarea{width:100%;min-height:58px;background:#26282f;color:var(--text);border:
 .guide p{margin:0 0 6px}.guide p:last-child{margin:0}
 body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.artist #note,body.artist #dbtns{display:none}
 #toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--flag);color:#fff;padding:9px 14px;border-radius:8px;display:none;z-index:20}
+
+@media(max-width:820px),(max-width:950px) and (max-height:500px){
+ header{position:static;padding:calc(10px + env(safe-area-inset-top,0px)) max(12px,env(safe-area-inset-right,0px)) 10px max(12px,env(safe-area-inset-left,0px))}
+ main{padding-left:max(12px,env(safe-area-inset-left,0px));padding-right:max(12px,env(safe-area-inset-right,0px))}
+ #whobtn{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ header>.row{display:grid;grid-template-columns:minmax(0,1fr) auto}
+ header h1{grid-column:1/-1}
+ #filter{width:100%;min-width:0}
+ #stats{display:block;font-size:12px;padding-top:6px}
+ #tools .row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+ #tools select,#tools input,#tools button{width:100%;min-width:0}
+ #tile{display:none}
+ select,input,textarea{font-size:16px}
+ select,input,button,summary{min-height:44px}
+ summary{display:list-item;list-style-position:inside;padding:12px 0}
+ #grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .tile .tags{max-width:calc(100% - 46px);flex-wrap:wrap;justify-content:flex-end}
+ .tile .fl{width:44px;height:44px}
+ .tile.flag::after{right:52px}
+ #help{font-size:12px}
+ nav{display:grid;grid-template-columns:1fr 1fr;padding-bottom:calc(24px + env(safe-area-inset-bottom,0px))}
+ #pageinfo{grid-column:1/-1;grid-row:1;text-align:center}
+ #good{grid-column:1/-1;grid-row:2}
+ #detail{height:100dvh;overscroll-behavior:contain;padding-bottom:calc(104px + env(safe-area-inset-bottom,0px))}
+ .dwrap{padding:0 max(12px,env(safe-area-inset-right,0px)) 12px max(12px,env(safe-area-inset-left,0px));gap:12px}
+ .side,.detailbar{min-width:0}
+ .detailbar{position:sticky;top:0;z-index:2;background:var(--panel);padding:calc(10px + env(safe-area-inset-top,0px)) 0 10px;border-bottom:1px solid var(--line);flex-wrap:nowrap}
+ .detailbar h2{font-size:16px;white-space:nowrap;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis}
+ .detailbar .row{gap:5px;flex-wrap:nowrap;flex-shrink:0}
+ .detailbar button{padding:6px 9px}
+ #stage{max-height:44svh;width:100%}
+ #stage img{max-height:44svh;object-fit:contain}
+ #stage.zoom{max-height:60svh}
+ #stage.zoom img{max-height:none;max-width:none}
+ #dbtns{position:fixed;z-index:3;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:10px max(12px,env(safe-area-inset-right,0px)) calc(10px + env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px));background:var(--panel);border-top:1px solid var(--line);box-shadow:0 -8px 20px #0005}
+ #dbtns button{min-height:48px;padding:8px 5px}
+ .chips button,.chips.traits button,#tchips button{min-height:44px}
+ #artlist label.meta{display:flex;align-items:center;min-height:44px;gap:8px}
+ #note{min-height:78px}
+ #dstatus{margin:0;font-weight:600}
+ #toast{bottom:calc(90px + env(safe-area-inset-bottom,0px));max-width:calc(100% - 24px);width:max-content}
+ .box{margin:12vh 12px;max-width:none}
+ .fix{grid-template-columns:72px minmax(0,1fr)}
+ .fix img{width:72px;height:72px}
+ body.artist #detail{padding-bottom:env(safe-area-inset-bottom,0px)}
+}
+
+@media(min-width:951px),(min-width:821px) and (min-height:501px){
+ header{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+ header>.row{display:contents}
+ #tools{margin:0}#tools>.row{padding:0}
+ #tools[open]>summary,#helpbox[open]>summary{display:none}
+ #tchips{flex-basis:100%}
+ .progress{flex-basis:100%;margin-top:0}
+}
 </style></head><body>
 <header>
  <div class="row">
   <h1 id="ttl">Art Review</h1>
   <select id="filter" aria-label="Filter"></select>
+  <button id="whobtn" title="Change reviewer"></button>
+ </div>
+ <details id="tools"><summary>Filters &amp; lists</summary><div class="row">
   <select id="type" aria-label="Character type"></select>
   <select id="sort" aria-label="Order">
    <option value="id">ID order</option><option value="shuffle">Random sample</option>
@@ -93,27 +157,29 @@ body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.
   <input id="jump" placeholder="Go to ID" inputmode="numeric" size="8" aria-label="Go to ID">
   <button id="artbtn" class="primary">Artist view</button>
   <button id="fixbtn">Fix list</button>
-  <button id="whobtn" title="Change reviewer"></button>
+ </div></details>
+ <div class="row">
   <span id="stats"></span>
  </div>
  <div class="row" id="tchips"></div>
  <div class="progress"><i id="pOk" style="background:var(--ok)"></i><i id="pFlag" style="background:var(--flag)"></i></div>
 </header>
 <main>
- <p id="help"></p>
+ <details id="helpbox"><summary>How to review</summary><p id="help"></p></details>
  <div id="grid"></div>
  <nav><button id="prev">Back</button><span id="pageinfo"></span><button id="good" class="primary">Page looks good, next</button><button id="next">Skip page</button></nav>
 </main>
-<div id="detail"><div class="dwrap">
+<div id="detail" role="dialog" aria-labelledby="dtitle"><div class="dwrap">
+ <div class="detailbar"><h2 id="dtitle"></h2><div class="row"><button id="dprev" aria-label="Previous artwork">&larr;</button><button id="dnext" aria-label="Next artwork">&rarr;</button><button id="dclose">Close</button></div></div>
  <div id="stage"><img id="dimg" alt=""></div>
  <div class="side">
-  <div class="row" style="justify-content:space-between"><h2 id="dtitle"></h2><button id="dclose">Close</button></div>
-  <div class="row"><button id="dprev">&larr;</button><button id="dnext">&rarr;</button><span class="meta">Tap the art to zoom to 100%.</span></div>
+  <p id="dstatus" class="warn"></p>
+  <span class="meta">Tap the art to zoom to 100%.</span>
   <div class="chips" id="layers"></div>
   <div class="chips" id="reasons"></div>
-  <textarea id="note" placeholder="Note for the artist (optional)"></textarea>
+  <textarea aria-label="Review note" id="note" placeholder="Note for the artist (optional)"></textarea>
+  <details id="reviewinfo"><summary>Review history &amp; art details</summary><div class="meta" id="dmeta"></div></details>
   <div class="row" id="dbtns"><button class="primary" id="dok">OK</button><button id="dflag" style="background:var(--flag);border-color:var(--flag);color:#fff">Flag</button><button id="dclear">Clear</button></div>
-  <div class="meta" id="dmeta"></div>
  </div>
 </div></div>
 <div id="fixes" class="sheet"><div class="swrap">
@@ -272,7 +338,7 @@ async function pageGood(){
 function openDetail(id,seq=null){DSEQ=seq;
  const d=byId[id];dLayer="combined";const v=mine(id);dReasons=new Set(v?.reasons||[]);
  $("note").value=v?.note||"";$("stage").classList.remove("zoom");
- $("dtitle").textContent=CFG.noun+" "+id;$("detail").dataset.id=id;$("detail").classList.add("open");
+ $("dtitle").textContent=CFG.noun+" "+id;$("detail").dataset.id=id;$("detail").classList.add("open");$("detail").scrollTop=0;
  paintDetail();
 }
 function paintDetail(){
@@ -281,6 +347,7 @@ function paintDetail(){
  $("layers").innerHTML=["combined","character","background"].map(l=>`<button data-l="${l}" class="${l==dLayer?"on":""}">${l[0].toUpperCase()+l.slice(1)}</button>`).join("");
  $("reasons").innerHTML=REASONS.map(r=>`<button data-r="${r}" class="${dReasons.has(r)?"on":""}">${r}</button>`).join("");
  const v=mine(id);
+ $("dstatus").textContent=needsReReview(id)?"Needs re-review. Check the updated art.":"";
  $("dflag").textContent=v?.verdict=="flag"?"Update my flag":"Flag";
  $("dclear").textContent=v?.verdict=="flag"?"Remove my flag":"Clear";
  const others=Object.values(ALL[id]||{}).filter(r=>r.by!=ME&&r.verdict!="clear");
@@ -323,6 +390,7 @@ function moreArtist(){
  $("artmore").style.display=ASHOW<AROWS.length?"":"none";$("artmore").textContent=`Show more (${AROWS.length-ASHOW} left)`;
 }
 async function init(){
+ $("tools").open=$("helpbox").open=!matchMedia("(max-width:820px), (max-width:950px) and (max-height:500px)").matches;
  const r=await(await fetch("/data")).json();// Every ID goes into markup and URLs unescaped, so the page keeps only the five-digit IDs that the whole system uses.
  items=(Array.isArray(r.items)?r.items:r.items.items).filter(d=>/^\d{5}$/.test(d.id));ALL=r.verdicts;TRIAGE=r.triage;CATALOG=r.catalog_version;
  UPD={...r.updates};for(const d of items)if(d.upd)UPD[d.id]=d.upd;
