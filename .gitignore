@@ -5,6 +5,7 @@ REVIEW_PASSWORD.txt
 .wrangler/
 site/wrangler.toml
 site/public/gallery.html
+site/public/review-state.mjs
 site/items.json
 tools/site_fields.py
 tools/review.py

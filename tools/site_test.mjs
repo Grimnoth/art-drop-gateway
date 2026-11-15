@@ -22,6 +22,7 @@ writeFileSync(".dev.vars", `REVIEW_PASSWORD="${PW}"\nALLOW_HTTP="1"\n`);
 const wr = (...a) => execFileSync(W, [...a, ...CONFIG, "--persist-to", state], { stdio: "pipe" });
 mkdirSync("public", { recursive: true });
 copyFileSync("../tools/gallery.html", "public/gallery.html");
+copyFileSync("../tools/review-state.mjs", "public/review-state.mjs");
 const items = join(state, "items.json");
 writeFileSync(items, JSON.stringify(Array.from({ length: ITEMS }, (_, i) => ({ id: String(i + 1).padStart(5, "0") }))));
 wr("d1", "execute", "art-drop-gateway", "--local", "--file", "schema.sql");
@@ -53,7 +54,7 @@ try {
     ["other scheme", `Bearer ${PW}`],
   ];
   for (const [why, auth] of denied) {
-    for (const path of ["/", "/data", "/items.json", "/gallery.html", "/thumbs/00001_combined.webp", "/full/00001/combined.png", `/o/${V}/thumbs/00001_character.webp`, "/artist.csv"]) {
+    for (const path of ["/", "/data", "/review-state.mjs", "/items.json", "/gallery.html", "/thumbs/00001_combined.webp", "/full/00001/combined.png", `/o/${V}/thumbs/00001_character.webp`, "/artist.csv"]) {
       await test(`401 ${why} ${path}`, async () => assert.equal((await get(path, auth)).status, 401));
     }
   }
@@ -62,6 +63,11 @@ try {
 
   const ada = basic("ada", PW), max = basic("Max", PW);
   await test("page loads", async () => { const r = await get("/", ada); assert.equal(r.status, 200); assert.match(await r.text(), /Art Review/); });
+  await test("the gallery's shared review-state module loads behind the same password gate", async () => {
+    const r = await get("/review-state.mjs", ada);
+    assert.equal(r.status, 200); assert.match(r.headers.get("content-type"), /javascript/);
+    assert.equal(r.headers.get("cache-control"), "no-store"); assert.match(await r.text(), /export function reviewStatus/);
+  });
   await test("art loads", async () => {
     const a = await get("/thumbs/00001_combined.webp", ada); assert.equal(a.status, 200); assert.equal(a.headers.get("content-type"), "image/webp");
     assert.ok((await a.arrayBuffer()).byteLength > 1000);
@@ -122,6 +128,19 @@ try {
     assert.match(a, /^ID,file,what to fix/); assert.match(a, /00007/); assert.doesNotMatch(a, /00005/); assert.match(a, /""quotes""/);
     const f = await (await get("/flagged.csv", ada)).text(); assert.match(f, /00005/); assert.match(f, /Max: =SUM/);
     const d = await (await get("/data", ada)).json(); assert.equal(d.triage["00007"].status, "send");
+  });
+  await test("changed flagged art exports as needing re-review until its flag is updated or removed", async () => {
+    await post("/verdict", ada, [{ id: "00010", verdict: "flag", reasons: ["Edge halo"], note: "Original concern" }]);
+    wr("d1", "execute", "art-drop-gateway", "--local", "--command", "UPDATE reviews SET at=1 WHERE id='00010'; INSERT INTO updates (id,tag,kinds,at) VALUES ('00010','new-delivery','[\"character\"]',10); INSERT INTO triage (id,status,by_name,at) VALUES ('00010','send','Ada',2)");
+    const before = await (await get("/flagged.csv", ada)).text();
+    assert.match(before, /00010,.*Original concern.*needs re-review.*new-delivery/);
+    assert.doesNotMatch(await (await get("/artist.csv", ada)).text(), /00010/);
+    await post("/verdict", ada, [{ id: "00010", verdict: "flag", reasons: ["Edge halo"], note: "Updated concern" }]);
+    const after = await (await get("/flagged.csv", ada)).text();
+    assert.match(after, /00010,.*Updated concern.*,,"new-delivery"/);
+    assert.doesNotMatch(after.split(/\r?\n/).find((s) => s.startsWith("00010,")), /needs re-review/);
+    await post("/verdict", ada, [{ id: "00010", verdict: "clear" }]);
+    assert.doesNotMatch(await (await get("/flagged.csv", ada)).text(), /00010/);
   });
 } finally {
   dev.kill("SIGTERM"); rmSync(".dev.vars", { force: true }); rmSync(state, { recursive: true, force: true });

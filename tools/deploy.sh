@@ -7,6 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 W="${WRANGLER:-wrangler}"
 cd "$ROOT/site"
 mkdir -p public && cp ../tools/gallery.html public/gallery.html
+cp ../tools/review-state.mjs public/review-state.mjs
 "$W" deploy
 
 cd "$ROOT"

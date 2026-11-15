@@ -3,6 +3,8 @@
 // ponytail: one shared password and self-declared names, because this tool is temporary.
 // To restrict by person, put Cloudflare Access in front and read its verified email.
 
+import { reviewStatus } from "../tools/review-state.mjs";
+
 const THUMB = /^\/thumbs\/(\d{5})_(character|background|combined)\.webp$/;
 const FULL = /^\/full\/(\d{5})\/(character|background|combined)\.png$/;
 // Files that pull_update.py uploaded for one release. They are never overwritten.
@@ -100,21 +102,23 @@ const cell = (s) => q(/^[\s=+\-@]/.test(s) ? `'${s}` : s);
 async function exportCsv(env, artistOnly) {
   // Each item's last update is in meta/items.json. The D1 table holds updates from before that.
   const state = JSON.parse((await (await env.ART.get("meta/items.json"))?.text()) ?? "[]");
-  const updatedIn = new Map((Array.isArray(state) ? state : state.items).filter((d) => d.upd).map((d) => [d.id, d.upd.tag]));
+  const updatedIn = new Map((Array.isArray(state) ? state : state.items).filter((d) => d.upd).map((d) => [d.id, d.upd]));
   const { results } = await env.DB.prepare(
-    "SELECT r.id, r.by_name, r.reasons, r.note, COALESCE(t.status, '') AS status, COALESCE(u.tag, '') AS updated FROM reviews r LEFT JOIN triage t ON t.id = r.id LEFT JOIN updates u ON u.id = r.id WHERE r.verdict = 'flag' ORDER BY r.id",
+    "SELECT r.id, r.by_name, r.verdict, r.at, r.reasons, r.note, COALESCE(t.status, '') AS status, t.at AS triage_at, COALESCE(u.tag, '') AS updated, u.at AS update_at FROM reviews r LEFT JOIN triage t ON t.id = r.id LEFT JOIN updates u ON u.id = r.id WHERE r.verdict = 'flag' ORDER BY r.id",
   ).all();
   const byId = new Map();
   for (const r of results) {
-    if (artistOnly && r.status !== "send") continue;
     if (!byId.has(r.id)) byId.set(r.id, []);
     byId.get(r.id).push(r);
   }
   const rows = ["ID,file,what to fix,notes,flagged by,status,last updated in"];
   for (const [id, flags] of byId) {
+    const update = updatedIn.get(id) ?? (flags[0].updated ? { tag: flags[0].updated, at: flags[0].update_at } : undefined);
+    const status = reviewStatus(flags, update, { status: flags[0].status, at: flags[0].triage_at });
+    if (artistOnly && status !== "send") continue;
     const reasons = [...new Set(flags.flatMap((f) => JSON.parse(f.reasons)))].sort().join("; ");
     const notes = flags.filter((f) => f.note).map((f) => `${f.by_name}: ${f.note}`).join(" | ");
-    rows.push([id, `Images/ID${id}/${id}__combined.png`, cell(reasons), cell(notes), cell(flags.map((f) => f.by_name).join(", ")), flags[0].status, cell(updatedIn.get(id) ?? flags[0].updated)].join(","));
+    rows.push([id, `Images/ID${id}/${id}__combined.png`, cell(reasons), cell(notes), cell(flags.map((f) => f.by_name).join(", ")), status === "rereview" ? "needs re-review" : status, cell(update?.tag ?? "")].join(","));
   }
   const file = artistOnly ? "artist-fixes.csv" : "flagged.csv";
   return text(rows.join("\r\n") + "\r\n", 200, { "Content-Type": "text/csv", "Content-Disposition": `attachment; filename=${file}` });
@@ -138,6 +142,10 @@ export default {
       if (path === "/") {
         const page = await env.ASSETS.fetch(new URL("/gallery.html", url));
         return new Response(page.body, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Robots-Tag": "noindex" } });
+      }
+      if (path === "/review-state.mjs") {
+        const script = await env.ASSETS.fetch(new URL(path, url));
+        return new Response(script.body, { status: script.status, headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store", "X-Robots-Tag": "noindex" } });
       }
       if (path === "/data") return await data(env, name);
       if (path === "/flagged.csv") return await exportCsv(env, false);
