@@ -251,6 +251,60 @@ def extract_index(zip_path, dest):
                 (dest / m.filename).write_bytes(z.read(m))
 
 
+def extract_batch_manifest(zip_path, dest, names, sums):
+    """Normalize the replacement delivery into the existing, checked CSV publishing contract.
+
+    Return its exact ZIP-entry to canonical-path mapping; no delivery path is used as a local path.
+    """
+    with zipfile.ZipFile(zip_path) as z:
+        member = "Metadata/Final_Asset_Manifest.json"
+        if z.namelist().count(member) != 1:
+            raise Refuse("batch manifest is missing or duplicated")
+        try:
+            rows = json.loads(z.read(member))
+        except (ValueError, UnicodeError):
+            raise Refuse("batch manifest is not valid JSON")
+    if not isinstance(rows, list) or not rows:
+        raise Refuse("batch manifest must be a nonempty list")
+    members, assets, items, archives = {}, {}, {}, {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise Refuse("bad batch manifest row")
+        id_, kind, path, digest = (row.get(k) for k in ("ID", "layer", "relative_path", "SHA256"))
+        if (not isinstance(id_, str) or not re.fullmatch(r"\d{5}", id_) or kind not in KINDS
+                or not isinstance(path, str) or not isinstance(digest, str) or not HEX64.fullmatch(digest)):
+            raise Refuse("bad batch manifest identity or checksum")
+        match = re.fullmatch(r"(Batch_\d+_(\d{5})-(\d{5}))/(Backgrounds|Characters|Combined)/(\d{5})__(background|character|combined)\.png", path)
+        directory = {"background": "Backgrounds", "character": "Characters", "combined": "Combined"}[kind]
+        if (not match or match[5] != id_ or match[6] != kind or match[4] != directory
+                or not match[2] <= id_ <= match[3]):
+            raise Refuse("batch manifest path does not match its ID, layer or range")
+        archive = f"{match[1]}.zip"
+        if archive not in names or archive not in sums:
+            raise Refuse("batch manifest names an unavailable or unchecked archive")
+        rel = f"ID{id_}/{id_}__{kind}.png"
+        if rel in assets:
+            raise Refuse("batch manifest repeats an ID and layer")
+        members[path], assets[rel] = rel, digest
+        item = items.setdefault(id_, {"ID": id_})
+        item[f"{kind}_relative_path"], item[f"{kind}_sha256"] = rel, digest
+        archives[archive] = {"archive": archive, "first_ID": match[2], "last_ID": match[3]}
+    if any(any(f"{kind}_relative_path" not in item for kind in KINDS) for item in items.values()):
+        raise Refuse("batch manifest is missing an item's layer")
+    dest.mkdir(parents=True, exist_ok=True)
+    tables = [("ASSET_FILES.csv", ["relative_path", "sha256"],
+               [{"relative_path": rel, "sha256": assets[rel]} for rel in sorted(assets)]),
+              ("ID_DELIVERY_MANIFEST.csv", ["ID"] + [f"{k}_{field}" for k in KINDS for field in ("relative_path", "sha256")],
+               [items[id_] for id_ in sorted(items)]),
+              ("ARCHIVE_PLAN.csv", ["archive", "first_ID", "last_ID"], [archives[a] for a in sorted(archives)])]
+    for name, fields, records in tables:
+        with open(dest / name, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(records)
+    return members
+
+
 def check_manifests_agree(new, new_index):
     """Both manifests must name the same files and checksums, or measuring would fail later."""
     listed = {}
@@ -399,15 +453,20 @@ def run(a, store, work):
         folder.mkdir()
     names = source.assets(tag)
     mask(*names)
-    # Releases have named it SHA256SUMS.txt and SHA256SUMS_UPDATED.txt.
-    sum_files = [n for n in names if re.fullmatch(r"SHA256SUMS[\w.-]*\.txt", n)]
+    # Accept the delivery's project prefix as well as the original checksum names.
+    sum_files = [n for n in names if re.fullmatch(r"(?:[\w.-]+_)?SHA256SUMS[\w.-]*\.txt", n)]
     if len(sum_files) != 1:
         raise Refuse(f"the release needs one SHA256SUMS file, found {sum_files or 'none'}")
     sums = read_sums(source.fetch(tag, sum_files[0], download))
-    index_zip = [n for n in names if n.endswith(".zip") and "index" in n.lower()]
+    index_zip = [n for n in names if n.endswith(".zip") and ("index" in n.lower() or n == "Metadata.zip")]
     if len(index_zip) != 1:
         raise Refuse(f"expected one index ZIP, found {index_zip}")
-    extract_index(fetch_verified(source, tag, index_zip[0], download, sums), new_index)
+    index_path = fetch_verified(source, tag, index_zip[0], download, sums)
+    batch_members = None
+    if index_zip[0] == "Metadata.zip":
+        batch_members = extract_batch_manifest(index_path, new_index, names, sums)
+    else:
+        extract_index(index_path, new_index)
 
     new = load_assets(new_index)
     changed, removed = diff(old, new)
@@ -448,7 +507,9 @@ def run(a, store, work):
     if done:
         print(f"Resuming after {min(done, len(zips))} of {len(zips)} ZIPs.")
     store.put(f"meta/manifests/{manifest}.csv", one(new_index, ASSET_FILES))
-    wanted = {f"Images/{rel}": rel for rel in changed}
+    changed_set = set(changed)
+    wanted = ({path: rel for path, rel in batch_members.items() if rel in changed_set}
+              if batch_members is not None else {f"Images/{rel}": rel for rel in changed})
     needs = {i: {rel for rel in changed if REL.match(rel)[1] == i} for i in ids}
     results, staged, unexpected, batch_file = {}, set(), [], work / "batch.json"
 
@@ -477,7 +538,8 @@ def run(a, store, work):
             for m in z.infolist():
                 rel = None if m.is_dir() else wanted.get(m.filename)
                 if rel is None:
-                    if not m.is_dir() and not (m.filename.startswith("Images/") and REL.match(m.filename[7:])):
+                    if not m.is_dir() and not ((batch_members is not None and m.filename in batch_members)
+                            or (m.filename.startswith("Images/") and REL.match(m.filename[7:]))):
                         unexpected.append(m.filename)
                     continue
                 id_ = REL.match(rel)[1]
