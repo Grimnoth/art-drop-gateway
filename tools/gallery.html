@@ -71,6 +71,7 @@ textarea{width:100%;min-height:58px;background:#26282f;color:var(--text);border:
 @media(max-width:560px){.fix.art{grid-template-columns:110px minmax(0,1fr)}.fix.art img{width:110px;height:110px}}
 .badge{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;font-weight:700;margin-left:6px;vertical-align:1px}
 .badge.send{background:var(--flag);color:#fff}.badge.open{background:#55585f;color:#fff}.badge.fixed{background:var(--ok);color:#0b1a12}
+.badge.rereview{background:var(--accent);color:#1c1608}
 .guide{background:var(--panel);border-radius:8px;padding:10px 12px;margin:0 0 12px;font-size:13px}
 .guide p{margin:0 0 6px}.guide p:last-child{margin:0}
 body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.artist #note,body.artist #dbtns{display:none}
@@ -125,7 +126,7 @@ body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.
  <div class="row" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0" id="artttl">Artist view</h2><button id="artclose">Close</button></div>
  <div class="guide">
   <p id="artintro"></p>
-  <p><b>Sent to you:</b> the team wants a change. <b>Under review:</b> someone flagged it, and the team has not decided yet. <b>Fixed:</b> the team checked your new art.</p>
+  <p><b>Awaiting re-review:</b> flagged art changed and its reviewers need to check it again. <b>Sent to you:</b> the team wants a change. <b>Under review:</b> someone flagged it, and the team has not decided yet. <b>Fixed:</b> the team checked your new art.</p>
   <p>Tap a picture to see it full size, with its layers. When you publish a new delivery release, the site picks up the changed files within a day.</p>
  </div>
  <div class="tabs" id="arttabs"></div>
@@ -142,12 +143,13 @@ body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.
  <button class="primary">Start reviewing</button>
 </form></div>
 <div id="toast"></div>
-<script>
+<script type="module">
+import { reviewStatus, artVersion } from "/review-state.mjs";
 const PAGE=60, REASONS=["Character damaged","Edge halo","Cut off","Background clash","Hard to read","Too similar to another","Not good enough"];
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 let TR={},TCOUNT={};
-let items=[],byId={},ALL={},TRIAGE={},UPD={},ME="",list=[],page=0,cur=0,dLayer="combined",dReasons=new Set();
+let items=[],byId={},ALL={},TRIAGE={},UPD={},ME="",CATALOG="",list=[],page=0,cur=0,dLayer="combined",dReasons=new Set();
 // The artist reads flags and does not review. The name comes from the login.
 // Display words come from the Worker's settings (wrangler.toml [vars]), so one page serves any project.
 let CFG={title:"Art Review",noun:"Item",nouns:"items",artist:"Artist",chosen:"Chosen",others:"Not chosen",othersTag:"N"},HASCHOSEN=false;
@@ -169,16 +171,19 @@ const fullUrl=(d,k)=>vp(d.v?.[k])?`/o/${d.v[k]}Images/ID${d.id}/${d.id}__${k}.pn
 const mine=id=>ALL[id]?.[ME];
 const flaggers=id=>Object.values(ALL[id]||{}).filter(r=>r.verdict=="flag");
 const okers=id=>Object.values(ALL[id]||{}).filter(r=>r.verdict=="ok");
+const stOf=id=>reviewStatus(Object.values(ALL[id]||{}),UPD[id],TRIAGE[id]);
+const needsReReview=id=>stOf(id)=="rereview";
 // True when this item's art changed after my last review, or I have not reviewed it since.
-const stale=id=>!!UPD[id]&&(!mine(id)||mine(id).verdict=="clear"||mine(id).at<=UPD[id].at);
+const stale=id=>!!UPD[id]&&(!mine(id)||mine(id).verdict=="clear"||mine(id).art_version!==artVersion(UPD[id]));
 const FILTERS={
+ rereview:["Flagged art, needs re-review",d=>needsReReview(d.id)],
  updated:["Updated, needs my look",d=>stale(d.id)],
  roster:[()=>CFG.chosen,d=>d.mint],
  todo:[()=>`${CFG.chosen}, not reviewed by me`,d=>d.mint&&(!mine(d.id)||mine(d.id).verdict=="clear"||stale(d.id))],
  flag:["Flagged by anyone",d=>flaggers(d.id).length>0],
  mine:["Flagged by me",d=>mine(d.id)?.verdict=="flag"],
  split:["Reviewers disagree",d=>flaggers(d.id).length>0&&okers(d.id).length>0],
- send:["Going to the artist",d=>TRIAGE[d.id]?.status=="send"],
+ send:["Going to the artist",d=>stOf(d.id)=="send"],
  ok:["Marked OK by me",d=>mine(d.id)?.verdict=="ok"],
  prov:[()=>`${CFG.chosen}: provisional background`,d=>d.mint&&d.prov],
  clean:[()=>`${CFG.chosen}: effect cleanup`,d=>d.mint&&d.cleanup],
@@ -196,11 +201,16 @@ const hash=(id)=>{let h=2166136261;for(const c of id)h=Math.imul(h^c.charCodeAt(
 function state(){try{return JSON.parse(localStorage.getItem("bw")||"{}")}catch{return{}}}
 function saveState(){try{localStorage.setItem("bw",JSON.stringify({me:ME,f:$("filter").value,ty:$("type").value,s:$("sort").value,v:$("view").value,t:$("tile").value,tr:TR,page}))}catch{}}
 async function post(batch,path="/verdict"){
- try{const r=await fetch(path,{method:"POST",body:JSON.stringify(batch.map(b=>({...b,by:ME})))});if(!r.ok)throw new Error(r.status);}
+ try{const r=await fetch(path,{method:"POST",body:JSON.stringify(batch.map(b=>({...b,by:ME,catalog_version:CATALOG})))});if(!r.ok)throw new Error(r.status==409?"The art changed. Reload the gallery before saving":r.status);}
  catch(e){toast("Not saved: "+e.message+". Check the server.");throw e}
 }
 function toast(t){$("toast").textContent=t;$("toast").style.display="block";setTimeout(()=>$("toast").style.display="none",5000)}
-async function setV(id,verdict,reasons=[],note=""){const prev=mine(id),rec={id,by:ME,verdict,reasons,note,at:Math.floor(Date.now()/1000)};(ALL[id]??={})[ME]=rec;paintTile(id);stats();try{await post([rec]);fillFilters()}catch{if(prev)ALL[id][ME]=prev;else delete ALL[id][ME];paintTile(id);stats()}}
+async function setV(id,verdict,reasons=[],note=""){
+ const prev=mine(id),rec={id,by:ME,verdict,reasons,note,art_version:artVersion(UPD[id]),at:Math.floor(Date.now()/1000)};
+ (ALL[id]??={})[ME]=rec;paintTile(id);stats();
+ try{await post([rec]);fillFilters();compute();render();return true}
+ catch{if(prev)ALL[id][ME]=prev;else delete ALL[id][ME];paintTile(id);stats();return false}
+}
 function compute(){
  const f=FILTERS[$("filter").value][1],s=$("sort").value,ty=$("type").value;
  const tr=Object.entries(TR);
@@ -212,19 +222,19 @@ function compute(){
 function pages(){return Math.max(1,Math.ceil(list.length/PAGE))}
 function pageItems(){return list.slice(page*PAGE,(page+1)*PAGE)}
 function tileClass(d){const v=mine(d.id)?.verdict,f=flaggers(d.id).length;return "tile"+($("view").value=="character"?" char":"")+(f?" flag":v=="ok"&&!stale(d.id)?" ok":"")}
-const flagText=id=>"FLAG: "+flaggers(id).map(r=>r.by).join(", ");
+const flagText=id=>(needsReReview(id)?"Needs re-review: ":"FLAG: ")+flaggers(id).map(r=>r.by).join(", ");
+const tileTags=d=>(needsReReview(d.id)?"<b>Re-review</b>":"")+(!HASCHOSEN?"":d.mint?`<b class="star" title="${esc(CFG.chosen)}">&#9733;</b>`:`<b class="cut" title="${esc(CFG.others)}">${esc(CFG.othersTag)}</b>`)+[UPD[d.id]?"U":"",d.prov?"P":"",d.cleanup?"C":"",(d.twins||[]).length?"T":""].filter(Boolean).map(t=>`<b>${t}</b>`).join("");
 function render(){
  page=Math.min(page,pages()-1);cur=Math.min(cur,Math.max(0,pageItems().length-1));
  const view=$("view").value;
  $("grid").innerHTML=pageItems().map((d,i)=>{
-  const tags=(!HASCHOSEN?"":d.mint?`<b class="star" title="${esc(CFG.chosen)}">&#9733;</b>`:`<b class="cut" title="${esc(CFG.others)}">${esc(CFG.othersTag)}</b>`)+[UPD[d.id]?"U":"",d.prov?"P":"",d.cleanup?"C":"",(d.twins||[]).length?"T":""].filter(Boolean).map(t=>`<b>${t}</b>`).join("");
-  return `<div class="${tileClass(d)}${i==cur?" cur":""}" data-flags="${esc(flagText(d.id))}" data-id="${d.id}" data-i="${i}"><img loading="lazy" src="${thumbUrl(d,view)}" alt="${esc(CFG.noun)} ${d.id}"><span class="id">${d.id}</span><span class="tags">${tags}</span>${flagBtn(d.id)}</div>`}).join("");
+  return `<div class="${tileClass(d)}${i==cur?" cur":""}" data-flags="${esc(flagText(d.id))}" data-id="${d.id}" data-i="${i}"><img loading="lazy" src="${thumbUrl(d,view)}" alt="${esc(CFG.noun)} ${d.id}"><span class="id">${d.id}</span><span class="tags">${tileTags(d)}</span>${flagBtn(d.id)}</div>`}).join("");
  $("pageinfo").textContent=`Page ${page+1} of ${pages()} (${list.length} ${CFG.nouns})`;
  $("prev").disabled=page==0;
  stats();saveState();
 }
 const flagBtn=id=>{const on=mine(id)?.verdict=="flag";return `<button class="fl${on?" on":""}" title="${on?"Remove my flag":"Flag"}" aria-label="${on?"Remove my flag from":"Flag"} ${id}" aria-pressed="${on}">&#9873;</button>`};
-function paintTile(id){const el=document.querySelector(`.tile[data-id="${id}"]`);if(el){const c=el.classList.contains("cur");el.className=tileClass(byId[id])+(c?" cur":"");el.dataset.flags=flagText(id);el.querySelector(".fl").outerHTML=flagBtn(id)}}
+function paintTile(id){const el=document.querySelector(`.tile[data-id="${id}"]`);if(el){const c=el.classList.contains("cur");el.className=tileClass(byId[id])+(c?" cur":"");el.dataset.flags=flagText(id);el.querySelector(".fl").outerHTML=flagBtn(id);el.querySelector(".tags").innerHTML=tileTags(byId[id])}}
 function stats(){
  // Progress counts the chosen set when the data has one, and every item when it does not.
  const pool=HASCHOSEN?items.filter(d=>d.mint):items;
@@ -234,7 +244,7 @@ function stats(){
  $("pOk").style.width=ok/n*100+"%";$("pFlag").style.width=fl/n*100+"%";
 }
 // Filters for reviewers' own actions always show. Filters that depend on fields in the data show when they match.
-const ALWAYS=new Set(["updated","flag","mine","split","send","ok","all"]);
+const ALWAYS=new Set(["rereview","updated","flag","mine","split","send","ok","all"]);
 function fillFilters(){
  const shown=Object.entries(FILTERS).map(([k,[n,f]])=>[k,typeof n=="function"?n():n,items.filter(f).length]).filter(([k,,c])=>c||ALWAYS.has(k));
  // Keep the current filter while it still shows. One that ran out of matches falls back to the default.
@@ -253,7 +263,7 @@ function setTraits(next){TR=next;paintTChips();compute();goPage(0);saveState()}
 function goPage(p){page=Math.max(0,Math.min(pages()-1,p));cur=0;render();scrollTo(0,0)}
 async function pageGood(){
  const now=Math.floor(Date.now()/1000);
- const batch=pageItems().filter(d=>mine(d.id)?.verdict!="flag"||stale(d.id)).map(d=>({id:d.id,by:ME,verdict:"ok",reasons:[],note:"",at:now}));
+ const batch=pageItems().filter(d=>mine(d.id)?.verdict!="flag").map(d=>({id:d.id,by:ME,verdict:"ok",reasons:[],note:"",art_version:artVersion(UPD[d.id]),at:now}));
  try{if(batch.length)await post(batch)}catch{return}
  for(const b of batch)(ALL[b.id]??={})[ME]=b;
  const f=$("filter").value;
@@ -271,9 +281,11 @@ function paintDetail(){
  $("layers").innerHTML=["combined","character","background"].map(l=>`<button data-l="${l}" class="${l==dLayer?"on":""}">${l[0].toUpperCase()+l.slice(1)}</button>`).join("");
  $("reasons").innerHTML=REASONS.map(r=>`<button data-r="${r}" class="${dReasons.has(r)?"on":""}">${r}</button>`).join("");
  const v=mine(id);
+ $("dflag").textContent=v?.verdict=="flag"?"Update my flag":"Flag";
+ $("dclear").textContent=v?.verdict=="flag"?"Remove my flag":"Clear";
  const others=Object.values(ALL[id]||{}).filter(r=>r.by!=ME&&r.verdict!="clear");
- const warn=[UPD[id]?`Updated by the artist in ${UPD[id].tag} (${(UPD[id].kinds||[]).join(", ")}).${stale(id)?" Your last review was before this.":""}`:"",HASCHOSEN&&!d.mint?CFG.others+".":"",d.prov?"Background is provisional, not final approval.":"",d.cleanup?"Effect cleanup: the character differs from the source.":"",(d.clip||[]).length?"Figure reaches the "+d.clip.join(", ")+" edge.":"",d.diff>MISMATCH?`Combined differs from its layers (${d.diff}).`:"",d.errors?"File error: "+d.errors:""].filter(Boolean);
- $("dmeta").innerHTML=(d.mint?`<p style="color:var(--accent)"><b style="color:inherit">&#9733; ${esc(CFG.chosen)}</b></p>`:"")+(isArtist()?"":`<p><b>Your review:</b> ${v&&v.verdict!="clear"?v.verdict:"not reviewed"}</p>`)+others.map(r=>`<p><b>${esc(r.by)}:</b> ${esc(r.verdict)}${r.reasons?.length?" ("+esc(r.reasons.join(", "))+")":""}${r.note?" "+esc(r.note):""}</p>`).join("")+(TRIAGE[id]?.status?`<p><b>Fix list:</b> ${esc(TRIAGE[id].status)}</p>`:"")+warn.map(w=>`<p class="warn">${esc(w)}</p>`).join("")+
+ const warn=[needsReReview(id)?"Needs re-review. This art changed after it was flagged. Check the new art, then remove or update your flag.":"",UPD[id]?`Updated by the artist in ${UPD[id].tag} (${(UPD[id].kinds||[]).join(", ")}).${v&&v.art_version!==artVersion(UPD[id])?" Your last review is for an earlier version.":""}`:"",HASCHOSEN&&!d.mint?CFG.others+".":"",d.prov?"Background is provisional, not final approval.":"",d.cleanup?"Effect cleanup: the character differs from the source.":"",(d.clip||[]).length?"Figure reaches the "+d.clip.join(", ")+" edge.":"",d.diff>MISMATCH?`Combined differs from its layers (${d.diff}).`:"",d.errors?"File error: "+d.errors:""].filter(Boolean);
+ $("dmeta").innerHTML=(d.mint?`<p style="color:var(--accent)"><b style="color:inherit">&#9733; ${esc(CFG.chosen)}</b></p>`:"")+(isArtist()?"":`<p><b>Your review:</b> ${v&&v.verdict!="clear"?v.verdict:"not reviewed"}</p>`)+others.map(r=>`<p><b>${esc(r.by)}:</b> ${esc(r.verdict)}${r.reasons?.length?" ("+esc(r.reasons.join(", "))+")":""}${r.note?" "+esc(r.note):""}</p>`).join("")+(stOf(id)?`<p><b>Fix list:</b> ${esc(needsReReview(id)?"Needs re-review":stOf(id))}</p>`:"")+warn.map(w=>`<p class="warn">${esc(w)}</p>`).join("")+
   ((d.twins||[]).length?`<p><b>Same traits as:</b> ${d.twins.filter(t=>byId[t]).map(t=>`<a href="#" data-go="${t}" style="color:var(--accent)">${t}</a>`).join(", ")}</p>`:"")+
   (d.name?`<p><b>${esc(d.name)}</b>${d.animated?" (animated)":""}</p>`:"")+(Object.keys(d.traits||{}).length?`<p style="margin:0 0 4px">Tap a trait to show only ${esc(CFG.nouns)} with it:</p>`:"")+`<div class="chips traits">${Object.entries(d.traits||{}).map(([k,v])=>`<button data-tk="${esc(k)}" data-tv="${esc(v)}" class="${TR[k]==v?"on":""}">${esc(k)}: ${esc(v)}<i>${TCOUNT[k+"\u0000"+v]||0}</i></button>`).join("")}</div>`+(d.amend?`<p><b>Roster change:</b> ${esc(d.amend)}</p>`:"")+
   // Each fact shows only when the data has it.
@@ -285,8 +297,7 @@ function step(n){
  if(DSEQ){const nx=DSEQ[DSEQ.indexOf(id)+n];if(nx)openDetail(nx,DSEQ);return}
  const i=list.findIndex(d=>d.id==id),nx=list[i+n];if(!nx)return;page=Math.floor((i+n)/PAGE);cur=(i+n)%PAGE;render();openDetail(nx.id)}
 function close(){$("detail").classList.remove("open");$("dimg").src="";DSEQ=null}
-const stOf=id=>TRIAGE[id]?.status||"";
-const ATABS={send:["Sent to you",id=>stOf(id)=="send"],open:["All open flags",id=>stOf(id)=="send"||stOf(id)==""],fixed:["Fixed",id=>stOf(id)=="fixed"]};
+const ATABS={rereview:["Awaiting re-review",id=>needsReReview(id)],send:["Sent to you",id=>stOf(id)=="send"],open:["All open flags",id=>stOf(id)=="send"||stOf(id)==""],fixed:["Fixed",id=>stOf(id)=="fixed"]};
 function artistRows(tab){
  const noted=$("artnotes").checked;
  return items.filter(d=>flaggers(d.id).length&&ATABS[tab][1](d.id)&&(!noted||flaggers(d.id).some(r=>r.note)))
@@ -294,7 +305,7 @@ function artistRows(tab){
 }
 function openArtist(){
  const n=t=>artistRows(t).length;
- if(!ATAB)ATAB=n("send")?"send":"open";
+ if(!ATAB)ATAB=n("send")?"send":n("rereview")?"rereview":"open";
  $("arttabs").innerHTML=Object.entries(ATABS).map(([k,[t]])=>`<button data-t="${k}" class="${k==ATAB?"on":""}">${t} (${n(k)})</button>`).join("");
  $("artcsv").href=ATAB=="send"?"/artist.csv":"/flagged.csv";
  AROWS=artistRows(ATAB);ASHOW=0;$("artrows").innerHTML="";
@@ -303,7 +314,7 @@ function openArtist(){
  moreArtist();$("artlist").classList.add("open");
 }
 function artRow(d){
- const st=stOf(d.id),badge=st=="send"?`<span class="badge send">Sent to you</span>`:st=="fixed"?`<span class="badge fixed">Fixed</span>`:`<span class="badge open">Under review</span>`;
+ const st=stOf(d.id),badge=st=="rereview"?`<span class="badge rereview">Awaiting re-review</span>`:st=="send"?`<span class="badge send">Sent to you</span>`:st=="fixed"?`<span class="badge fixed">Fixed</span>`:`<span class="badge open">Under review</span>`;
  return `<div class="fix art" data-id="${d.id}"><img loading="lazy" src="${thumbUrl(d,"combined")}" alt="${esc(CFG.noun)} ${d.id}" data-open="1"><div><p><b>${esc(CFG.noun)} ${d.id}</b>${badge}</p><p class="meta">${HASCHOSEN?(d.mint?"&#9733; "+esc(CFG.chosen):esc(CFG.others))+". ":""}File: Images/ID${d.id}/${d.id}__combined.png</p><p><b>Flagged by</b> ${esc(flaggers(d.id).map(r=>r.by).join(", "))}</p>${flaggers(d.id).filter(r=>r.note||r.reasons?.length).map(r=>`<p><b>${esc(r.by)}:</b> ${esc([(r.reasons||[]).join(", "),r.note].filter(Boolean).join(". "))}</p>`).join("")}${UPD[d.id]?`<p class="warn">You updated it in ${esc(UPD[d.id].tag)}.</p>`:""}</div></div>`;
 }
 function moreArtist(){
@@ -313,7 +324,7 @@ function moreArtist(){
 }
 async function init(){
  const r=await(await fetch("/data")).json();// Every ID goes into markup and URLs unescaped, so the page keeps only the five-digit IDs that the whole system uses.
- items=(Array.isArray(r.items)?r.items:r.items.items).filter(d=>/^\d{5}$/.test(d.id));ALL=r.verdicts;TRIAGE=r.triage;
+ items=(Array.isArray(r.items)?r.items:r.items.items).filter(d=>/^\d{5}$/.test(d.id));ALL=r.verdicts;TRIAGE=r.triage;CATALOG=r.catalog_version;
  UPD={...r.updates};for(const d of items)if(d.upd)UPD[d.id]=d.upd;
  CFG={...CFG,...r.config};HASCHOSEN=items.some(d=>d.mint);applyConfig();byId=Object.fromEntries(items.map(d=>[d.id,d]));
  for(const d of items)for(const [k,v] of Object.entries(d.traits||{}))TCOUNT[k+"\u0000"+v]=(TCOUNT[k+"\u0000"+v]||0)+1;
@@ -336,13 +347,11 @@ function askWho(){
 $("whobtn").onclick=askWho;
 $("whoform").onsubmit=e=>{e.preventDefault();const n=$("whoname").value.trim();if(!n)return;ME=n;document.body.classList.toggle("artist",isArtist());$("whobtn").textContent=ME;$("whoask").classList.remove("open");fillFilters();compute();render()};
 function paintFixes(){
- const rows=items.filter(d=>flaggers(d.id).length),rank={"":0,send:1,keep:2,fixed:3},st=id=>TRIAGE[id]?.status||"";
- // Art that came back for an item marked "Send to artist" waits for a decision, so it goes first.
- const back=id=>st(id)=="send"&&!!UPD[id]&&UPD[id].at>=(TRIAGE[id].at||0);
- rows.sort((a,b)=>back(b.id)-back(a.id)||rank[st(a.id)]-rank[st(b.id)]||a.id.localeCompare(b.id));
+ const rows=items.filter(d=>flaggers(d.id).length),rank={rereview:-1,"":0,send:1,keep:2,fixed:3},st=stOf;
+ rows.sort((a,b)=>rank[st(a.id)]-rank[st(b.id)]||a.id.localeCompare(b.id));
  const n=s=>rows.filter(d=>st(d.id)==s).length;
- $("fixsum").textContent=`${rows.length} flagged: ${n("")} to decide, ${n("send")} going to the artist, ${n("keep")} kept as they are, ${n("fixed")} fixed.`;
- $("fixrows").innerHTML=rows.map(d=>`<div class="fix" data-id="${d.id}"><img loading="lazy" src="${thumbUrl(d,"combined")}" alt="${esc(CFG.noun)} ${d.id}" data-open="1"><div><p><b>${d.id}</b>${!HASCHOSEN?"":d.mint?" &#9733;":` (${esc(CFG.othersTag)})`}${UPD[d.id]?` <span class="warn">Updated in ${esc(UPD[d.id].tag)}${back(d.id)?". Check it, then mark it Fixed.":""}</span>`:""}</p>${flaggers(d.id).map(r=>`<p><b>${esc(r.by)}:</b> ${esc((r.reasons||[]).join(", ")||"flagged")}${r.note?". "+esc(r.note):""}</p>`).join("")}<div class="row">${[["send","Send to artist"],["keep","Keep as is"],["fixed","Fixed"]].map(([s,t])=>`<button data-s="${s}" class="${st(d.id)==s?"on":""}">${t}</button>`).join("")}</div></div></div>`).join("")||"<p>Nothing is flagged yet.</p>";
+ $("fixsum").textContent=`${rows.length} flagged: ${n("rereview")} need re-review, ${n("")} to decide, ${n("send")} going to the artist, ${n("keep")} kept as they are, ${n("fixed")} fixed.`;
+ $("fixrows").innerHTML=rows.map(d=>`<div class="fix" data-id="${d.id}"><img loading="lazy" src="${thumbUrl(d,"combined")}" alt="${esc(CFG.noun)} ${d.id}" data-open="1"><div><p><b>${d.id}</b>${!HASCHOSEN?"":d.mint?" &#9733;":` (${esc(CFG.othersTag)})`}${needsReReview(d.id)?' <span class="badge rereview">Needs re-review</span>':""}${UPD[d.id]?` <span class="warn">Updated in ${esc(UPD[d.id].tag)}</span>`:""}</p>${flaggers(d.id).map(r=>`<p><b>${esc(r.by)}:</b> ${esc((r.reasons||[]).join(", ")||"flagged")}${r.note?". "+esc(r.note):""}</p>`).join("")}<div class="row">${needsReReview(d.id)?'<button data-open="1">Review updated art</button>':[["send","Send to artist"],["keep","Keep as is"],["fixed","Fixed"]].map(([s,t])=>`<button data-s="${s}" class="${st(d.id)==s?"on":""}">${t}</button>`).join("")}</div></div></div>`).join("")||"<p>Nothing is flagged yet.</p>";
 }
 $("artbtn").onclick=openArtist;
 $("artclose").onclick=()=>$("artlist").classList.remove("open");
@@ -356,7 +365,7 @@ $("fixrows").onclick=async e=>{
  const row=e.target.closest(".fix");if(!row)return;const id=row.dataset.id;
  if(e.target.dataset.open){$("fixes").classList.remove("open");return openDetail(id)}
  const s=e.target.dataset.s;if(!s)return;
- const status=TRIAGE[id]?.status==s?"":s;
+ const status=stOf(id)==s?"":s;
  try{await post([{id,status}],"/triage")}catch{return}
  TRIAGE[id]={id,status,by:ME,at:Math.floor(Date.now()/1000)};paintFixes();
 };
@@ -380,8 +389,16 @@ $("dmeta").onclick=e=>{
  const g=e.target.dataset.go;if(g){e.preventDefault();openDetail(g)}
 };
 $("tchips").onclick=e=>{const b=e.target.closest("button");if(!b)return;if(b.dataset.all)return setTraits({});const next={...TR};delete next[b.dataset.k];setTraits(next)};
-const dSave=async(verdict)=>{const id=$("detail").dataset.id;await setV(id,verdict,verdict=="flag"?[...dReasons]:[],verdict=="clear"?"":$("note").value);fillFilters();verdict=="clear"?paintDetail():step(1)};
-$("dok").onclick=()=>dSave("ok");$("dflag").onclick=()=>dSave("flag");$("dclear").onclick=()=>{dReasons.clear();$("note").value="";dSave("clear")};
+const dSave=async(verdict)=>{
+ const id=$("detail").dataset.id,index=list.findIndex(d=>d.id==id);
+ if(!await setV(id,verdict,verdict=="flag"?[...dReasons]:[],verdict=="clear"?"":$("note").value))return;
+ if(verdict=="clear"){dReasons.clear();$("note").value="";paintDetail();return}
+ paintDetail();
+ if(DSEQ||list.some(d=>d.id==id))return step(1);
+ const next=list[Math.min(Math.max(index,0),list.length-1)];
+ next?openDetail(next.id):close();
+};
+$("dok").onclick=()=>dSave("ok");$("dflag").onclick=()=>dSave("flag");$("dclear").onclick=()=>dSave("clear");
 document.onkeydown=e=>{
  if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;
  const open=$("detail").classList.contains("open");

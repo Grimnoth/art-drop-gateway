@@ -12,6 +12,13 @@ gives the artist a clean list of the flags, and publishes each new release by it
 - **The review:** `tools/gallery.html` is the whole front end, one file. Reviewers flag items with reasons and
   notes, filter by trait, and sort the flags in a fix list. Reviews live in D1.
 - **The artist view:** when the artist signs in with their name, the site opens on their flags only.
+- **Re-review:** when flagged art changes, its previous flags and notes stay and its state becomes **Needs
+  re-review**. Reviewers can filter that queue, inspect the new art, then remove or update their own flags.
+  Every reviewer with an old flag must revisit it. Bulk page approval leaves flags alone. The fix list,
+  artist view and CSV exports use the same state; pending re-reviews are not sent back to the artist.
+  Each review records the art version it was made against, so a tab showing older art cannot acknowledge a
+  newer version just by saving later. Saves also check the gallery's catalog version and ask stale tabs to
+  reload before changing any reviews or fix-list decisions.
 - **The update:** `tools/pull_update.py` compares the artist's latest release with the site by checksum,
   downloads only the ZIPs that changed, and publishes only the changed items.
 
@@ -65,6 +72,12 @@ You need a Cloudflare account, `wrangler`, Python 3.12 with Pillow, and the `gh`
    tools/deploy.sh
    ```
 
+   Upgrades first apply the D1 migrations, adding the default-empty `reviews.art_version` column while
+   preserving existing flags and notes. Wrangler tracks applied migrations, so reruns do not repeat them,
+   and a migration failure stops deployment. Before a direct `wrangler deploy` on an existing installation,
+   run `wrangler d1 migrations apply DB --remote` from `site/`.
+   Existing reviews and older clients have no version acknowledgement and stay pending after an art update.
+
 6. For the daily job, add these repository secrets. Use secrets, not variables, because GitHub hides secret values
    in public logs: `DELIVERY_REPO`, `DELIVERY_REPO_TOKEN` (reads that repo's releases), `R2_BUCKET`,
    `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` (R2 edit), and optionally `SITE_FIELDS_PY`.
@@ -103,6 +116,10 @@ python3 -I tools/pull_update.py
 That reports what changed and changes nothing. Add `--apply` to publish, or name a tag to use another release.
 
 ## Tests
+
+```bash
+node --test tools/gallery_test.mjs
+```
 
 ```bash
 python3 -I tools/test_pull_update.py

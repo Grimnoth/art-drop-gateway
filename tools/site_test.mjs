@@ -2,7 +2,7 @@
 // Run from site/: node ../tools/site_test.mjs   (WRANGLER names the wrangler command; default: wrangler)
 // It uses wrangler.example.toml and made-up data, so it needs no deployment of its own.
 import { spawn, execFileSync } from "node:child_process";
-import { writeFileSync, rmSync, mkdtempSync, mkdirSync, copyFileSync } from "node:fs";
+import { readFileSync, writeFileSync, rmSync, mkdtempSync, mkdirSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
@@ -13,18 +13,21 @@ const CONFIG = ["--config", "wrangler.example.toml"];
 const ITEMS = 50;
 const BASE = "http://127.0.0.1:8799";
 const PW = "test-password:with-colon";
+let catalogVersion = "";
 const basic = (name, pw) => `Basic ${Buffer.from(`${name}:${pw}`).toString("base64")}`;
 const get = (path, auth, init = {}) => fetch(BASE + path, { redirect: "manual", signal: AbortSignal.timeout(15000), ...init, headers: { ...(auth ? { Authorization: auth } : {}), ...init.headers } });
-const post = (path, auth, body, origin = BASE) => get(path, auth, { method: "POST", body: JSON.stringify(body), headers: { Origin: origin } });
+const post = (path, auth, body, origin = BASE) => get(path, auth, { method: "POST", body: JSON.stringify(body.map(r=>({...r,catalog_version:catalogVersion}))), headers: { Origin: origin } });
 
 const state = mkdtempSync(join(tmpdir(), "gateway-site-test-"));
 writeFileSync(".dev.vars", `REVIEW_PASSWORD="${PW}"\nALLOW_HTTP="1"\n`);
 const wr = (...a) => execFileSync(W, [...a, ...CONFIG, "--persist-to", state], { stdio: "pipe" });
 mkdirSync("public", { recursive: true });
 copyFileSync("../tools/gallery.html", "public/gallery.html");
+copyFileSync("../tools/review-state.mjs", "public/review-state.mjs");
 const items = join(state, "items.json");
 writeFileSync(items, JSON.stringify(Array.from({ length: ITEMS }, (_, i) => ({ id: String(i + 1).padStart(5, "0") }))));
 wr("d1", "execute", "art-drop-gateway", "--local", "--file", "schema.sql");
+wr("d1", "migrations", "apply", "DB", "--local");
 wr("r2", "object", "put", "art-drop-gateway/meta/items.json", "--local", "--file", items);
 // Stand-in art, because the real art lives only in R2. The Worker serves bytes by path and never decodes them.
 const fakeThumb = join(state, "thumb.webp"), fakeFull = join(state, "full.png");
@@ -41,6 +44,16 @@ let failed = 0;
 const test = async (name, fn) => { try { await fn(); console.log("ok  ", name); } catch (e) { failed++; console.log("FAIL", name, e.message); } };
 try {
   for (let i = 0; i < 60; i++) { try { await get("/"); break; } catch { await new Promise((r) => setTimeout(r, 500)); } }
+  catalogVersion = (await (await get("/data", basic("Ada", PW))).json()).catalog_version;
+
+  await test("the schema upgrade preserves existing reviews and is safe to repeat", async () => {
+    const legacy = join(state, "legacy-upgrade");
+    const run = (...args) => execFileSync(W, [...args, ...CONFIG, "--persist-to", legacy], { stdio: "pipe" });
+    run("d1", "execute", "DB", "--local", "--command", "CREATE TABLE reviews (id TEXT NOT NULL,by_name TEXT NOT NULL,verdict TEXT NOT NULL,reasons TEXT NOT NULL DEFAULT '[]',note TEXT NOT NULL DEFAULT '',at INTEGER NOT NULL,PRIMARY KEY(id,by_name)); INSERT INTO reviews (id,by_name,verdict,note,at) VALUES ('00001','Ada','flag','Preserve my concern',7)");
+    for (let i = 0; i < 2; i++) run("d1", "migrations", "apply", "DB", "--local");
+    const records = JSON.parse(run("d1", "execute", "DB", "--local", "--json", "--command", "SELECT id,by_name,verdict,note,at,art_version FROM reviews").toString())[0].results;
+    assert.deepEqual(records, [{ id: "00001", by_name: "Ada", verdict: "flag", note: "Preserve my concern", at: 7, art_version: "" }]);
+  });
 
   const denied = [
     ["no login", undefined],
@@ -53,7 +66,7 @@ try {
     ["other scheme", `Bearer ${PW}`],
   ];
   for (const [why, auth] of denied) {
-    for (const path of ["/", "/data", "/items.json", "/gallery.html", "/thumbs/00001_combined.webp", "/full/00001/combined.png", `/o/${V}/thumbs/00001_character.webp`, "/artist.csv"]) {
+    for (const path of ["/", "/data", "/review-state.mjs", "/items.json", "/gallery.html", "/thumbs/00001_combined.webp", "/full/00001/combined.png", `/o/${V}/thumbs/00001_character.webp`, "/artist.csv"]) {
       await test(`401 ${why} ${path}`, async () => assert.equal((await get(path, auth)).status, 401));
     }
   }
@@ -62,6 +75,11 @@ try {
 
   const ada = basic("ada", PW), max = basic("Max", PW);
   await test("page loads", async () => { const r = await get("/", ada); assert.equal(r.status, 200); assert.match(await r.text(), /Art Review/); });
+  await test("the gallery's shared review-state module loads behind the same password gate", async () => {
+    const r = await get("/review-state.mjs", ada);
+    assert.equal(r.status, 200); assert.match(r.headers.get("content-type"), /javascript/);
+    assert.equal(r.headers.get("cache-control"), "no-store"); assert.match(await r.text(), /export function reviewStatus/);
+  });
   await test("art loads", async () => {
     const a = await get("/thumbs/00001_combined.webp", ada); assert.equal(a.status, 200); assert.equal(a.headers.get("content-type"), "image/webp");
     assert.ok((await a.arrayBuffer()).byteLength > 1000);
@@ -101,6 +119,7 @@ try {
     assert.equal((await post("/verdict", ada, [{ id: "00005", verdict: "nope" }])).status, 400);
     assert.equal((await post("/triage", ada, [{ id: "00005", status: "nope" }])).status, 400);
     assert.equal((await get("/verdict", ada, { method: "POST", body: "{", headers: { Origin: BASE } })).status, 400);
+    assert.equal((await post("/verdict", ada, [{ id: "00005", verdict: "flag", art_version: {} }])).status, 400);
   });
   await test("a reason that starts with a space cannot run as a spreadsheet formula", async () => {
     await post("/verdict", ada, [{ id: "00009", verdict: "flag", reasons: [" =HYPERLINK(1)"] }]);
@@ -122,6 +141,50 @@ try {
     assert.match(a, /^ID,file,what to fix/); assert.match(a, /00007/); assert.doesNotMatch(a, /00005/); assert.match(a, /""quotes""/);
     const f = await (await get("/flagged.csv", ada)).text(); assert.match(f, /00005/); assert.match(f, /Max: =SUM/);
     const d = await (await get("/data", ada)).json(); assert.equal(d.triage["00007"].status, "send");
+  });
+  await test("changed flagged art exports as needing re-review until its flag is updated or removed", async () => {
+    await post("/verdict", ada, [{ id: "00010", verdict: "flag", reasons: ["Edge halo"], note: "Original concern" }]);
+    wr("d1", "execute", "art-drop-gateway", "--local", "--command", "UPDATE reviews SET at=1 WHERE id='00010'; INSERT INTO updates (id,tag,kinds,at) VALUES ('00010','new-delivery','[\"character\"]',10); INSERT INTO triage (id,status,by_name,at) VALUES ('00010','send','Ada',2)");
+    const before = await (await get("/flagged.csv", ada)).text();
+    assert.match(before, /00010,.*Original concern.*needs re-review.*new-delivery/);
+    assert.doesNotMatch(await (await get("/artist.csv", ada)).text(), /00010/);
+    await post("/verdict", ada, [{ id: "00010", verdict: "flag", reasons: ["Edge halo"], note: "Old tab concern", art_version: "previous:1" }]);
+    assert.match(await (await get("/flagged.csv", ada)).text(), /00010,.*needs re-review/);
+    await post("/verdict", ada, [{ id: "00010", verdict: "flag", reasons: ["Edge halo"], note: "Updated concern", art_version: "new-delivery:10" }]);
+    const saved = await (await get("/data", ada)).json();
+    assert.equal(saved.verdicts["00010"].Ada.art_version, "new-delivery:10");
+    const after = await (await get("/flagged.csv", ada)).text();
+    assert.match(after, /00010,.*Updated concern.*,,"new-delivery"/);
+    assert.doesNotMatch(after.split(/\r?\n/).find((s) => s.startsWith("00010,")), /needs re-review/);
+    await post("/verdict", ada, [{ id: "00010", verdict: "clear" }]);
+    assert.doesNotMatch(await (await get("/flagged.csv", ada)).text(), /00010/);
+  });
+  await test("a stale gallery cannot clear an existing flag or change triage after publication", async () => {
+    await post("/verdict", ada, [{id:"00011",verdict:"flag",note:"Keep until re-reviewed"}]);
+    const next = JSON.parse(readFileSync(items, "utf8"));
+    next.find(d=>d.id==="00011").upd={tag:"after-tab",kinds:["character"],at:10};
+    writeFileSync(items, JSON.stringify(next));
+    wr("r2","object","put","art-drop-gateway/meta/items.json","--local","--file",items);
+    const save = (path,body) => get(path,ada,{method:"POST",body:JSON.stringify(body),headers:{Origin:BASE}});
+    assert.equal((await save("/verdict",[{id:"00011",verdict:"ok",catalog_version:catalogVersion,art_version:""}])).status,409);
+    assert.equal((await save("/triage",[{id:"00011",status:"fixed",catalog_version:catalogVersion}])).status,409);
+    assert.equal((await save("/verdict",[{id:"00011",verdict:"clear"}])).status,409);
+    const current=await (await get("/data",ada)).json();
+    assert.equal(current.verdicts["00011"].Ada.verdict,"flag");
+    assert.equal(current.verdicts["00011"].Ada.note,"Keep until re-reviewed");
+    assert.equal(current.triage["00011"],undefined);
+    assert.notEqual(current.catalog_version,catalogVersion);
+    catalogVersion=current.catalog_version;
+    assert.equal((await post("/verdict",ada,[{id:"00011",verdict:"flag",note:"Checked current art",art_version:"after-tab:10"}])).status,200);
+  });
+  await test("the review API serves a complete collection larger than one D1 value", async () => {
+    wr("d1","execute","DB","--local","--command", "WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM ids WHERE n<4000) INSERT INTO reviews(id,by_name,verdict,reasons,note,at,art_version) SELECT printf('%05d',n),'LoadFixture','flag','[]',printf('%0500d',0),1,'delivery-fixture:1900000000' FROM ids");
+    const r=await get("/data",ada);
+    assert.equal(r.status,200);
+    const data=await r.json();
+    assert.ok(Buffer.byteLength(JSON.stringify(data.verdicts))>2*1024*1024);
+    assert.equal(Object.values(data.verdicts).filter(v=>v.LoadFixture).length,4000);
+    assert.equal(data.verdicts["04000"].LoadFixture.note.length,500);
   });
 } finally {
   dev.kill("SIGTERM"); rmSync(".dev.vars", { force: true }); rmSync(state, { recursive: true, force: true });
