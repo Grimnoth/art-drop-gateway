@@ -26,6 +26,7 @@ copyFileSync("../tools/review-state.mjs", "public/review-state.mjs");
 const items = join(state, "items.json");
 writeFileSync(items, JSON.stringify(Array.from({ length: ITEMS }, (_, i) => ({ id: String(i + 1).padStart(5, "0") }))));
 wr("d1", "execute", "art-drop-gateway", "--local", "--file", "schema.sql");
+wr("d1", "migrations", "apply", "DB", "--local");
 wr("r2", "object", "put", "art-drop-gateway/meta/items.json", "--local", "--file", items);
 // Stand-in art, because the real art lives only in R2. The Worker serves bytes by path and never decodes them.
 const fakeThumb = join(state, "thumb.webp"), fakeFull = join(state, "full.png");
@@ -42,6 +43,15 @@ let failed = 0;
 const test = async (name, fn) => { try { await fn(); console.log("ok  ", name); } catch (e) { failed++; console.log("FAIL", name, e.message); } };
 try {
   for (let i = 0; i < 60; i++) { try { await get("/"); break; } catch { await new Promise((r) => setTimeout(r, 500)); } }
+
+  await test("the schema upgrade preserves existing reviews and is safe to repeat", async () => {
+    const legacy = join(state, "legacy-upgrade");
+    const run = (...args) => execFileSync(W, [...args, ...CONFIG, "--persist-to", legacy], { stdio: "pipe" });
+    run("d1", "execute", "DB", "--local", "--command", "CREATE TABLE reviews (id TEXT NOT NULL,by_name TEXT NOT NULL,verdict TEXT NOT NULL,reasons TEXT NOT NULL DEFAULT '[]',note TEXT NOT NULL DEFAULT '',at INTEGER NOT NULL,PRIMARY KEY(id,by_name)); INSERT INTO reviews (id,by_name,verdict,note,at) VALUES ('00001','Ada','flag','Preserve my concern',7)");
+    for (let i = 0; i < 2; i++) run("d1", "migrations", "apply", "DB", "--local");
+    const records = JSON.parse(run("d1", "execute", "DB", "--local", "--json", "--command", "SELECT id,by_name,verdict,note,at,art_version FROM reviews").toString())[0].results;
+    assert.deepEqual(records, [{ id: "00001", by_name: "Ada", verdict: "flag", note: "Preserve my concern", at: 7, art_version: "" }]);
+  });
 
   const denied = [
     ["no login", undefined],
@@ -107,6 +117,7 @@ try {
     assert.equal((await post("/verdict", ada, [{ id: "00005", verdict: "nope" }])).status, 400);
     assert.equal((await post("/triage", ada, [{ id: "00005", status: "nope" }])).status, 400);
     assert.equal((await get("/verdict", ada, { method: "POST", body: "{", headers: { Origin: BASE } })).status, 400);
+    assert.equal((await post("/verdict", ada, [{ id: "00005", verdict: "flag", art_version: {} }])).status, 400);
   });
   await test("a reason that starts with a space cannot run as a spreadsheet formula", async () => {
     await post("/verdict", ada, [{ id: "00009", verdict: "flag", reasons: [" =HYPERLINK(1)"] }]);
@@ -135,7 +146,11 @@ try {
     const before = await (await get("/flagged.csv", ada)).text();
     assert.match(before, /00010,.*Original concern.*needs re-review.*new-delivery/);
     assert.doesNotMatch(await (await get("/artist.csv", ada)).text(), /00010/);
-    await post("/verdict", ada, [{ id: "00010", verdict: "flag", reasons: ["Edge halo"], note: "Updated concern" }]);
+    await post("/verdict", ada, [{ id: "00010", verdict: "flag", reasons: ["Edge halo"], note: "Old tab concern", art_version: "previous:1" }]);
+    assert.match(await (await get("/flagged.csv", ada)).text(), /00010,.*needs re-review/);
+    await post("/verdict", ada, [{ id: "00010", verdict: "flag", reasons: ["Edge halo"], note: "Updated concern", art_version: "new-delivery:10" }]);
+    const saved = await (await get("/data", ada)).json();
+    assert.equal(saved.verdicts["00010"].Ada.art_version, "new-delivery:10");
     const after = await (await get("/flagged.csv", ada)).text();
     assert.match(after, /00010,.*Updated concern.*,,"new-delivery"/);
     assert.doesNotMatch(after.split(/\r?\n/).find((s) => s.startsWith("00010,")), /needs re-review/);

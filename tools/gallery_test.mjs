@@ -6,8 +6,8 @@ import vm from "node:vm";
 const html = readFileSync(new URL("./gallery.html", import.meta.url), "utf8");
 const script = html.match(/<script(?: type="module")?>([\s\S]*?)<\/script>/)[1]
   .replace(/^import .*review-state.*;\s*$/m, "").replace(/\binit\(\);\s*$/, "");
-let reviewStatus;
-try { ({ reviewStatus } = await import("./review-state.mjs")); } catch (e) {
+let reviewStatus, artVersion;
+try { ({ reviewStatus, artVersion } = await import("./review-state.mjs")); } catch (e) {
   if (e.code !== "ERR_MODULE_NOT_FOUND") throw e;
 }
 
@@ -21,7 +21,7 @@ function gallery({ failSave = false } = {}) {
     }
     return nodes.get(id);
   };
-  const context = vm.createContext({ reviewStatus, document: { getElementById: node, querySelector: () => null },
+  const context = vm.createContext({ reviewStatus, artVersion, document: { getElementById: node, querySelector: () => null },
     localStorage: { getItem: () => "{}", setItem() {} }, scrollTo() {}, setTimeout() {},
     fetch: async (path, options) => { writes.push({ path, body: JSON.parse(options.body) }); return { ok: !failSave, status: failSave ? 503 : 200 }; } });
   vm.runInContext(script, context);
@@ -70,6 +70,13 @@ test("another reviewer's old flag remains pending until they update or remove it
   assert.equal(g.run('needsReReview("00001")'), false);
   g.run('UPD["00001"].at=Date.now()/1000+10');
   assert.equal(g.run('needsReReview("00001")'), true, "a later art change must require another review");
+});
+
+test("a timestamp after publication cannot acknowledge art that was reviewed in an old tab", () => {
+  const g = gallery();
+  g.run('ALL["00001"].Ada.at=Math.floor(Date.now()/1000); ALL["00001"].Ada.art_version="previous-delivery:1"');
+  assert.equal(g.run('needsReReview("00001")'), true);
+  assert.equal(g.run('stale("00001")'), true);
 });
 
 test("bulk page approval preserves old flagged art and its note", async () => {

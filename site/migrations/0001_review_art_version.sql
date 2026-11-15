@@ -1,0 +1,1 @@
+ALTER TABLE reviews ADD COLUMN art_version TEXT NOT NULL DEFAULT '';

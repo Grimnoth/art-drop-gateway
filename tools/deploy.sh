@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/tools/env.sh" && load_env "$ROOT/.env"
 W="${WRANGLER:-wrangler}"
 cd "$ROOT/site"
+"$W" d1 migrations apply DB --remote
 mkdir -p public && cp ../tools/gallery.html public/gallery.html
 cp ../tools/review-state.mjs public/review-state.mjs
 "$W" deploy

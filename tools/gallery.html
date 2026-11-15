@@ -144,7 +144,7 @@ body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.
 </form></div>
 <div id="toast"></div>
 <script type="module">
-import { reviewStatus } from "/review-state.mjs";
+import { reviewStatus, artVersion } from "/review-state.mjs";
 const PAGE=60, REASONS=["Character damaged","Edge halo","Cut off","Background clash","Hard to read","Too similar to another","Not good enough"];
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -174,7 +174,7 @@ const okers=id=>Object.values(ALL[id]||{}).filter(r=>r.verdict=="ok");
 const stOf=id=>reviewStatus(Object.values(ALL[id]||{}),UPD[id],TRIAGE[id]);
 const needsReReview=id=>stOf(id)=="rereview";
 // True when this item's art changed after my last review, or I have not reviewed it since.
-const stale=id=>!!UPD[id]&&(!mine(id)||mine(id).verdict=="clear"||mine(id).at<=UPD[id].at);
+const stale=id=>!!UPD[id]&&(!mine(id)||mine(id).verdict=="clear"||mine(id).art_version!==artVersion(UPD[id]));
 const FILTERS={
  rereview:["Flagged art, needs re-review",d=>needsReReview(d.id)],
  updated:["Updated, needs my look",d=>stale(d.id)],
@@ -206,7 +206,7 @@ async function post(batch,path="/verdict"){
 }
 function toast(t){$("toast").textContent=t;$("toast").style.display="block";setTimeout(()=>$("toast").style.display="none",5000)}
 async function setV(id,verdict,reasons=[],note=""){
- const prev=mine(id),rec={id,by:ME,verdict,reasons,note,at:Math.floor(Date.now()/1000)};
+ const prev=mine(id),rec={id,by:ME,verdict,reasons,note,art_version:artVersion(UPD[id]),at:Math.floor(Date.now()/1000)};
  (ALL[id]??={})[ME]=rec;paintTile(id);stats();
  try{await post([rec]);fillFilters();compute();render();return true}
  catch{if(prev)ALL[id][ME]=prev;else delete ALL[id][ME];paintTile(id);stats();return false}
@@ -263,7 +263,7 @@ function setTraits(next){TR=next;paintTChips();compute();goPage(0);saveState()}
 function goPage(p){page=Math.max(0,Math.min(pages()-1,p));cur=0;render();scrollTo(0,0)}
 async function pageGood(){
  const now=Math.floor(Date.now()/1000);
- const batch=pageItems().filter(d=>mine(d.id)?.verdict!="flag").map(d=>({id:d.id,by:ME,verdict:"ok",reasons:[],note:"",at:now}));
+ const batch=pageItems().filter(d=>mine(d.id)?.verdict!="flag").map(d=>({id:d.id,by:ME,verdict:"ok",reasons:[],note:"",art_version:artVersion(UPD[d.id]),at:now}));
  try{if(batch.length)await post(batch)}catch{return}
  for(const b of batch)(ALL[b.id]??={})[ME]=b;
  const f=$("filter").value;
@@ -284,7 +284,7 @@ function paintDetail(){
  $("dflag").textContent=v?.verdict=="flag"?"Update my flag":"Flag";
  $("dclear").textContent=v?.verdict=="flag"?"Remove my flag":"Clear";
  const others=Object.values(ALL[id]||{}).filter(r=>r.by!=ME&&r.verdict!="clear");
- const warn=[needsReReview(id)?"Needs re-review. This art changed after it was flagged. Check the new art, then remove or update your flag.":"",UPD[id]?`Updated by the artist in ${UPD[id].tag} (${(UPD[id].kinds||[]).join(", ")}).${v&&v.at<=UPD[id].at?" Your last review was before this.":""}`:"",HASCHOSEN&&!d.mint?CFG.others+".":"",d.prov?"Background is provisional, not final approval.":"",d.cleanup?"Effect cleanup: the character differs from the source.":"",(d.clip||[]).length?"Figure reaches the "+d.clip.join(", ")+" edge.":"",d.diff>MISMATCH?`Combined differs from its layers (${d.diff}).`:"",d.errors?"File error: "+d.errors:""].filter(Boolean);
+ const warn=[needsReReview(id)?"Needs re-review. This art changed after it was flagged. Check the new art, then remove or update your flag.":"",UPD[id]?`Updated by the artist in ${UPD[id].tag} (${(UPD[id].kinds||[]).join(", ")}).${v&&v.art_version!==artVersion(UPD[id])?" Your last review is for an earlier version.":""}`:"",HASCHOSEN&&!d.mint?CFG.others+".":"",d.prov?"Background is provisional, not final approval.":"",d.cleanup?"Effect cleanup: the character differs from the source.":"",(d.clip||[]).length?"Figure reaches the "+d.clip.join(", ")+" edge.":"",d.diff>MISMATCH?`Combined differs from its layers (${d.diff}).`:"",d.errors?"File error: "+d.errors:""].filter(Boolean);
  $("dmeta").innerHTML=(d.mint?`<p style="color:var(--accent)"><b style="color:inherit">&#9733; ${esc(CFG.chosen)}</b></p>`:"")+(isArtist()?"":`<p><b>Your review:</b> ${v&&v.verdict!="clear"?v.verdict:"not reviewed"}</p>`)+others.map(r=>`<p><b>${esc(r.by)}:</b> ${esc(r.verdict)}${r.reasons?.length?" ("+esc(r.reasons.join(", "))+")":""}${r.note?" "+esc(r.note):""}</p>`).join("")+(stOf(id)?`<p><b>Fix list:</b> ${esc(needsReReview(id)?"Needs re-review":stOf(id))}</p>`:"")+warn.map(w=>`<p class="warn">${esc(w)}</p>`).join("")+
   ((d.twins||[]).length?`<p><b>Same traits as:</b> ${d.twins.filter(t=>byId[t]).map(t=>`<a href="#" data-go="${t}" style="color:var(--accent)">${t}</a>`).join(", ")}</p>`:"")+
   (d.name?`<p><b>${esc(d.name)}</b>${d.animated?" (animated)":""}</p>`:"")+(Object.keys(d.traits||{}).length?`<p style="margin:0 0 4px">Tap a trait to show only ${esc(CFG.nouns)} with it:</p>`:"")+`<div class="chips traits">${Object.entries(d.traits||{}).map(([k,v])=>`<button data-tk="${esc(k)}" data-tv="${esc(v)}" class="${TR[k]==v?"on":""}">${esc(k)}: ${esc(v)}<i>${TCOUNT[k+"\u0000"+v]||0}</i></button>`).join("")}</div>`+(d.amend?`<p><b>Roster change:</b> ${esc(d.amend)}</p>`:"")+

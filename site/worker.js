@@ -46,7 +46,7 @@ async function object(req, env, key, type) {
 }
 
 const VERDICTS_SQL = `SELECT COALESCE(json_group_object(id, json(people)), '{}') AS j FROM (
-  SELECT id, json_group_object(by_name, json_object('id', id, 'by', by_name, 'verdict', verdict, 'reasons', json(reasons), 'note', note, 'at', at)) AS people
+  SELECT id, json_group_object(by_name, json_object('id', id, 'by', by_name, 'verdict', verdict, 'reasons', json(reasons), 'note', note, 'art_version', art_version, 'at', at)) AS people
   FROM reviews GROUP BY id)`;
 const TRIAGE_SQL = `SELECT COALESCE(json_group_object(id, json_object('id', id, 'status', status, 'by', by_name, 'at', at)), '{}') AS j FROM triage`;
 
@@ -86,8 +86,9 @@ async function save(req, env, path, name) {
       stmts.push(env.DB.prepare("INSERT INTO triage (id, status, by_name, at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET status=?2, by_name=?3, at=?4").bind(r.id, r.status, name, at));
     } else {
       if (!["ok", "flag", "clear"].includes(r.verdict)) return json('{"error":"bad verdict"}', 400);
+      if (r.art_version !== undefined && (typeof r.art_version !== "string" || !/^(?:[A-Za-z0-9][A-Za-z0-9._-]{0,80}:\d{1,16})?$/.test(r.art_version))) return json('{"error":"bad art version"}', 400);
       const reasons = JSON.stringify((Array.isArray(r.reasons) ? r.reasons : []).map((x) => String(x).slice(0, 60)));
-      stmts.push(env.DB.prepare("INSERT INTO reviews (id, by_name, verdict, reasons, note, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(id, by_name) DO UPDATE SET verdict=?3, reasons=?4, note=?5, at=?6").bind(r.id, name, r.verdict, reasons, String(r.note ?? "").slice(0, 500), at));
+      stmts.push(env.DB.prepare("INSERT INTO reviews (id, by_name, verdict, reasons, note, at, art_version) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT(id, by_name) DO UPDATE SET verdict=?3, reasons=?4, note=?5, at=?6, art_version=?7").bind(r.id, name, r.verdict, reasons, String(r.note ?? "").slice(0, 500), at, r.art_version ?? ""));
     }
   }
   if (stmts.length) await env.DB.batch(stmts);
@@ -104,7 +105,7 @@ async function exportCsv(env, artistOnly) {
   const state = JSON.parse((await (await env.ART.get("meta/items.json"))?.text()) ?? "[]");
   const updatedIn = new Map((Array.isArray(state) ? state : state.items).filter((d) => d.upd).map((d) => [d.id, d.upd]));
   const { results } = await env.DB.prepare(
-    "SELECT r.id, r.by_name, r.verdict, r.at, r.reasons, r.note, COALESCE(t.status, '') AS status, t.at AS triage_at, COALESCE(u.tag, '') AS updated, u.at AS update_at FROM reviews r LEFT JOIN triage t ON t.id = r.id LEFT JOIN updates u ON u.id = r.id WHERE r.verdict = 'flag' ORDER BY r.id",
+    "SELECT r.id, r.by_name, r.verdict, r.at, r.art_version, r.reasons, r.note, COALESCE(t.status, '') AS status, t.at AS triage_at, COALESCE(u.tag, '') AS updated, u.at AS update_at FROM reviews r LEFT JOIN triage t ON t.id = r.id LEFT JOIN updates u ON u.id = r.id WHERE r.verdict = 'flag' ORDER BY r.id",
   ).all();
   const byId = new Map();
   for (const r of results) {
