@@ -158,6 +158,22 @@ class Bucket:
         if r.returncode:
             raise StoreError(f"cannot write {key}", (r.stderr or r.stdout).strip()[-300:])
 
+    def put_many(self, entries, work):
+        """Acknowledge bounded bulk uploads before the caller writes a ZIP checkpoint."""
+        for suffix in (".png", ".webp"):
+            files = [{"key": key, "file": str(path.resolve())} for key, path in entries if Path(key).suffix == suffix]
+            for start in range(0, len(files), 300):
+                batch = files[start:start + 300]
+                manifest = work / "bulk-upload.json"
+                manifest.write_text(json.dumps(batch))
+                began = time.monotonic()
+                r = self._run("r2", "bulk", "put", self.bucket, "--remote", "--filename", str(manifest.resolve()),
+                              "--concurrency", "5", "--content-type", TYPES[suffix])
+                if r.returncode:
+                    raise StoreError("cannot upload artwork batch", (r.stderr or r.stdout).strip()[-300:])
+                # Keep the same conservative request budget across separate CLI invocations and MIME groups.
+                time.sleep(max(0, len(batch) * self.GAP - (time.monotonic() - began)))
+
 
 class Folder:
     """A folder that stands in for the bucket, for tests. GATEWAY_FAIL_AFTER=n makes the write after n writes fail."""
@@ -179,6 +195,10 @@ class Folder:
         self.puts += 1
         (self.root / key).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, self.root / key)
+
+    def put_many(self, entries, work):
+        for key, path in entries:
+            self.put(key, path)
 
 
 def get_text(store, key, work):
@@ -494,9 +514,9 @@ def run(a, store, work):
         if id_ not in by_id:
             raise Refuse(f"ID {id_} is not on the site. New items need a fresh import: see the README.")
 
-    # Nothing uploaded under r/ shows until meta/items.json names it, so each item is published to r/ as soon as
-    # its changed files are unpacked, and those files are deleted. Disk holds one ZIP plus the items that wait
-    # for a file in a later ZIP, which a full re-render on the job's runner needs.
+    # Nothing uploaded under r/ shows until meta/items.json names it. Each ZIP's changed files and thumbnails
+    # are uploaded in bounded batches before its checkpoint. Disk holds one ZIP plus its outgoing files and
+    # any incomplete items waiting for a later ZIP.
     # The run key depends only on what the site shows, this release and its ZIP list, so every upload under it has
     # fixed content and a saved ZIP count always means the same ZIPs. Two runs never write different bytes to one key.
     zip_list = ",".join(f"{z}={sums[z]}" for z in zips)  # a repaired ZIP with the same name starts fresh
@@ -507,24 +527,34 @@ def run(a, store, work):
     if done:
         print(f"Resuming after {min(done, len(zips))} of {len(zips)} ZIPs.")
     store.put(f"meta/manifests/{manifest}.csv", one(new_index, ASSET_FILES))
-    changed_set = set(changed)
-    wanted = ({path: rel for path, rel in batch_members.items() if rel in changed_set}
+    changed_ids = set(ids)
+    wanted = ({path: rel for path, rel in batch_members.items() if REL.match(rel)[1] in changed_ids}
               if batch_members is not None else {f"Images/{rel}": rel for rel in changed})
     needs = {i: {rel for rel in changed if REL.match(rel)[1] == i} for i in ids}
+    required = ({i: {f"ID{i}/{i}__{kind}.png" for kind in KINDS} for i in ids}
+                if batch_members is not None else needs)
     results, staged, unexpected, batch_file = {}, set(), [], work / "batch.json"
+    outgoing, uploads = work / "outgoing", []
+
+    def queue_upload(key, path):
+        dest = outgoing / key
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(path, dest)
+        uploads.append((key, dest))
 
     def publish_item(id_):
         rels = sorted(needs[id_])
-        check_staged(rels, staging, new)
+        check_staged(sorted(required[id_]), staging, new)
         thumbs = work / "thumbs"
         result = measure(store, [id_], rows, staging, work, by_id, thumbs)
         for rel in rels:
-            store.put(f"{prefix}Images/{rel}", staging / rel)
-            (staging / rel).unlink()
+            queue_upload(f"{prefix}Images/{rel}", staging / rel)
         for p in sorted(thumbs.iterdir()):
-            store.put(f"{prefix}thumbs/{p.name}", p)
+            queue_upload(f"{prefix}thumbs/{p.name}", p)
         shutil.rmtree(thumbs)
-        staged.difference_update(rels)
+        for rel in required[id_]:
+            (staging / rel).unlink(missing_ok=True)
+        staged.difference_update(required[id_])
         return result
 
     for n, name in enumerate(zips):
@@ -555,10 +585,13 @@ def run(a, store, work):
                     shutil.copyfileobj(src, dst, 1 << 20)
                 staged.add(rel)
                 # An item is ready when all its changed files are unpacked. One that spans two ZIPs waits.
-                if needs[id_] <= staged:
+                if required[id_] <= staged:
                     batch.update(publish_item(id_))
                     results.update(batch)
         path.unlink()
+        store.put_many(uploads, work)
+        uploads.clear()
+        shutil.rmtree(outgoing, ignore_errors=True)
         batch_file.write_text(json.dumps(batch))
         store.put(f"{prefix}results/{n}.json", batch_file)
         # Save only when nothing waits on disk, so that a resumed run never needs files it deleted.

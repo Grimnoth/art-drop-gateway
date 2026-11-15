@@ -102,6 +102,7 @@ def tool(store, source, *args, tag="second", env=None):
                           capture_output=True, text=True, env={**os.environ, **fields, **(env or {})})
 
 
+
 def state(store):
     s = json.loads((store / "meta/items.json").read_text())
     tag = store / "meta/current.txt"
@@ -142,6 +143,41 @@ def test(name):
                 failures += 1
                 print("FAIL", name, e)
     return wrap
+
+
+@test("bucket bulk uploads preserve bytes and MIME types before returning, and report transport failure")
+def _(t):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("pull", TOOL)
+    pull = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pull)
+    os.environ["R2_BUCKET"] = "synthetic-bucket"
+    commands = []
+    class RecordingBucket(pull.Bucket):
+        GAP = 0
+        def _run(self, *args):
+            entries = json.loads(Path(args[args.index("--filename") + 1]).read_text())
+            commands.append((args, [(e["key"], Path(e["file"]).read_bytes()) for e in entries]))
+            return subprocess.CompletedProcess(args, 1 if self.fail else 0, "", "synthetic failure")
+    bucket = RecordingBucket(t)
+    bucket.fail = False
+    a, b = t / "a.png", t / "b.webp"
+    a.write_bytes(b"png"); b.write_bytes(b"webp")
+    entries = [("r/0123456789abcdef/Images/ID00001/00001__combined.png", a),
+               ("r/0123456789abcdef/thumbs/00001_combined.webp", b)]
+    assert hasattr(bucket, "put_many"), "bucket cannot publish a checked batch"
+    bucket.put_many(entries, t)
+    assert len(commands) == 2
+    for args, uploads in commands:
+        assert args[:4] == ("r2", "bulk", "put", "synthetic-bucket") and "--remote" in args
+        mime = args[args.index("--content-type") + 1]
+        assert uploads[0][1] == (b"png" if mime == "image/png" else b"webp")
+    bucket.fail = True
+    try:
+        bucket.put_many(entries, t)
+        assert False, "failed upload was accepted"
+    except pull.StoreError:
+        pass
 
 
 def changed_art(art, id_="00002", shade=200):
@@ -199,6 +235,27 @@ def _(t):
     r = tool(store, src)
     assert r.returncode == 0 and "3 changed files in 1 IDs" in r.stdout, r.stderr + r.stdout
     assert "Review.zip" not in r.stdout and files(store) == before
+
+
+@test("batch measurements use checked unchanged layers from the ZIP without downloading old images")
+def _(t):
+    import importlib.util, types
+    spec = importlib.util.spec_from_file_location("pull", TOOL)
+    pull = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pull)
+    store, art = make_store(t)
+    new = {i: dict(trip) for i, trip in art.items()}
+    new["00002"]["combined"] = triplet(200)["combined"]
+    src = make_batch_release(t, new)
+    class NoImageReads(pull.Folder):
+        def get(self, key, dest):
+            assert not key.endswith(".png"), "downloaded an unchanged layer already in the batch ZIP"
+            return super().get(key, dest)
+    work = t / "work"
+    work.mkdir()
+    args = types.SimpleNamespace(tag="second", repo=None, source=str(src), apply=True)
+    assert pull.run(args, NoImageReads(store), work) == 0
+    assert shown(store)["00002", "combined"] == new["00002"]["combined"]
 
 
 @test("dry run reports the delta and changes nothing")

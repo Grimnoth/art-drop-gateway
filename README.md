@@ -27,6 +27,9 @@ The bucket is the only copy of the art, so the update never overwrites a file in
 
 A run that stops at any point leaves the site on the old release, whole. The next run continues from
 `meta/progress.txt`. The tests stop a publish before each of its writes and check both promises.
+Artwork uses Wrangler's bulk upload command in groups of at most 300 files, paced to the same request budget.
+Each ZIP's progress is saved only after all its artwork uploads succeed. A batch delivery also supplies its
+unchanged layers for measurement, so the updater does not download those layers again from the live site.
 
 ## Set it up
 
