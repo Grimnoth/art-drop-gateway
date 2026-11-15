@@ -27,6 +27,9 @@ The bucket is the only copy of the art, so the update never overwrites a file in
 
 A run that stops at any point leaves the site on the old release, whole. The next run continues from
 `meta/progress.txt`. The tests stop a publish before each of its writes and check both promises.
+Artwork uses Wrangler's bulk upload command in groups of at most 300 files, paced to the same request budget.
+Each ZIP's progress is saved only after all its artwork uploads succeed. A batch delivery also supplies its
+unchanged layers for measurement, so the updater does not download those layers again from the live site.
 
 ## Set it up
 
@@ -72,6 +75,14 @@ You need a Cloudflare account, `wrangler`, Python 3.12 with Pillow, and the `gh`
 - one index ZIP with `ASSET_FILES*.csv` (`relative_path`, `sha256`) and `ID_DELIVERY_MANIFEST*.csv` (`ID`, then
   `<kind>_relative_path` and `<kind>_sha256` for `character`, `background` and `combined`)
 - image ZIPs with `Images/IDnnnnn/nnnnn__<kind>.png`
+
+Replacement deliveries may instead use a project-prefixed checksum file, `Metadata.zip` containing
+`Metadata/Final_Asset_Manifest.json`, and `Batch_nn_first-last.zip` artwork archives. The JSON manifest lists
+each `ID`, `layer`, `relative_path` and `SHA256`; paths are
+`Batch_nn_first-last/Backgrounds|Characters|Combined/nnnnn__<kind>.png`. The updater validates the ID, layer,
+range and checksum, requires all three layers, and converts that manifest into the same publishing contract.
+It downloads only batches containing changed items and does not download `Review.zip`. Existing review notes
+remain when the replacement manifest supplies no new notes.
 
 The update refuses, and the site does not change, when a manifest drops a file, the two manifests disagree, a
 row names another item's file, a file fails its checksum, or an image cannot be read.

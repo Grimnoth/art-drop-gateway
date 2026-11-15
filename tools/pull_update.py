@@ -158,6 +158,22 @@ class Bucket:
         if r.returncode:
             raise StoreError(f"cannot write {key}", (r.stderr or r.stdout).strip()[-300:])
 
+    def put_many(self, entries, work):
+        """Acknowledge bounded bulk uploads before the caller writes a ZIP checkpoint."""
+        for suffix in (".png", ".webp"):
+            files = [{"key": key, "file": str(path.resolve())} for key, path in entries if Path(key).suffix == suffix]
+            for start in range(0, len(files), 300):
+                batch = files[start:start + 300]
+                manifest = work / "bulk-upload.json"
+                manifest.write_text(json.dumps(batch))
+                began = time.monotonic()
+                r = self._run("r2", "bulk", "put", self.bucket, "--remote", "--filename", str(manifest.resolve()),
+                              "--concurrency", "5", "--content-type", TYPES[suffix])
+                if r.returncode:
+                    raise StoreError("cannot upload artwork batch", (r.stderr or r.stdout).strip()[-300:])
+                # Keep the same conservative request budget across separate CLI invocations and MIME groups.
+                time.sleep(max(0, len(batch) * self.GAP - (time.monotonic() - began)))
+
 
 class Folder:
     """A folder that stands in for the bucket, for tests. GATEWAY_FAIL_AFTER=n makes the write after n writes fail."""
@@ -179,6 +195,10 @@ class Folder:
         self.puts += 1
         (self.root / key).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, self.root / key)
+
+    def put_many(self, entries, work):
+        for key, path in entries:
+            self.put(key, path)
 
 
 def get_text(store, key, work):
@@ -249,6 +269,60 @@ def extract_index(zip_path, dest):
         for m in z.infolist():
             if not m.is_dir() and re.fullmatch(r"[\w.-]+\.(csv|md|txt)", m.filename):
                 (dest / m.filename).write_bytes(z.read(m))
+
+
+def extract_batch_manifest(zip_path, dest, names, sums):
+    """Normalize the replacement delivery into the existing, checked CSV publishing contract.
+
+    Return its exact ZIP-entry to canonical-path mapping; no delivery path is used as a local path.
+    """
+    with zipfile.ZipFile(zip_path) as z:
+        member = "Metadata/Final_Asset_Manifest.json"
+        if z.namelist().count(member) != 1:
+            raise Refuse("batch manifest is missing or duplicated")
+        try:
+            rows = json.loads(z.read(member))
+        except (ValueError, UnicodeError):
+            raise Refuse("batch manifest is not valid JSON")
+    if not isinstance(rows, list) or not rows:
+        raise Refuse("batch manifest must be a nonempty list")
+    members, assets, items, archives = {}, {}, {}, {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise Refuse("bad batch manifest row")
+        id_, kind, path, digest = (row.get(k) for k in ("ID", "layer", "relative_path", "SHA256"))
+        if (not isinstance(id_, str) or not re.fullmatch(r"\d{5}", id_) or kind not in KINDS
+                or not isinstance(path, str) or not isinstance(digest, str) or not HEX64.fullmatch(digest)):
+            raise Refuse("bad batch manifest identity or checksum")
+        match = re.fullmatch(r"(Batch_\d+_(\d{5})-(\d{5}))/(Backgrounds|Characters|Combined)/(\d{5})__(background|character|combined)\.png", path)
+        directory = {"background": "Backgrounds", "character": "Characters", "combined": "Combined"}[kind]
+        if (not match or match[5] != id_ or match[6] != kind or match[4] != directory
+                or not match[2] <= id_ <= match[3]):
+            raise Refuse("batch manifest path does not match its ID, layer or range")
+        archive = f"{match[1]}.zip"
+        if archive not in names or archive not in sums:
+            raise Refuse("batch manifest names an unavailable or unchecked archive")
+        rel = f"ID{id_}/{id_}__{kind}.png"
+        if rel in assets:
+            raise Refuse("batch manifest repeats an ID and layer")
+        members[path], assets[rel] = rel, digest
+        item = items.setdefault(id_, {"ID": id_})
+        item[f"{kind}_relative_path"], item[f"{kind}_sha256"] = rel, digest
+        archives[archive] = {"archive": archive, "first_ID": match[2], "last_ID": match[3]}
+    if any(any(f"{kind}_relative_path" not in item for kind in KINDS) for item in items.values()):
+        raise Refuse("batch manifest is missing an item's layer")
+    dest.mkdir(parents=True, exist_ok=True)
+    tables = [("ASSET_FILES.csv", ["relative_path", "sha256"],
+               [{"relative_path": rel, "sha256": assets[rel]} for rel in sorted(assets)]),
+              ("ID_DELIVERY_MANIFEST.csv", ["ID"] + [f"{k}_{field}" for k in KINDS for field in ("relative_path", "sha256")],
+               [items[id_] for id_ in sorted(items)]),
+              ("ARCHIVE_PLAN.csv", ["archive", "first_ID", "last_ID"], [archives[a] for a in sorted(archives)])]
+    for name, fields, records in tables:
+        with open(dest / name, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(records)
+    return members
 
 
 def check_manifests_agree(new, new_index):
@@ -399,15 +473,20 @@ def run(a, store, work):
         folder.mkdir()
     names = source.assets(tag)
     mask(*names)
-    # Releases have named it SHA256SUMS.txt and SHA256SUMS_UPDATED.txt.
-    sum_files = [n for n in names if re.fullmatch(r"SHA256SUMS[\w.-]*\.txt", n)]
+    # Accept the delivery's project prefix as well as the original checksum names.
+    sum_files = [n for n in names if re.fullmatch(r"(?:[\w.-]+_)?SHA256SUMS[\w.-]*\.txt", n)]
     if len(sum_files) != 1:
         raise Refuse(f"the release needs one SHA256SUMS file, found {sum_files or 'none'}")
     sums = read_sums(source.fetch(tag, sum_files[0], download))
-    index_zip = [n for n in names if n.endswith(".zip") and "index" in n.lower()]
+    index_zip = [n for n in names if n.endswith(".zip") and ("index" in n.lower() or n == "Metadata.zip")]
     if len(index_zip) != 1:
         raise Refuse(f"expected one index ZIP, found {index_zip}")
-    extract_index(fetch_verified(source, tag, index_zip[0], download, sums), new_index)
+    index_path = fetch_verified(source, tag, index_zip[0], download, sums)
+    batch_members = None
+    if index_zip[0] == "Metadata.zip":
+        batch_members = extract_batch_manifest(index_path, new_index, names, sums)
+    else:
+        extract_index(index_path, new_index)
 
     new = load_assets(new_index)
     changed, removed = diff(old, new)
@@ -435,9 +514,9 @@ def run(a, store, work):
         if id_ not in by_id:
             raise Refuse(f"ID {id_} is not on the site. New items need a fresh import: see the README.")
 
-    # Nothing uploaded under r/ shows until meta/items.json names it, so each item is published to r/ as soon as
-    # its changed files are unpacked, and those files are deleted. Disk holds one ZIP plus the items that wait
-    # for a file in a later ZIP, which a full re-render on the job's runner needs.
+    # Nothing uploaded under r/ shows until meta/items.json names it. Each ZIP's changed files and thumbnails
+    # are uploaded in bounded batches before its checkpoint. Disk holds one ZIP plus its outgoing files and
+    # any incomplete items waiting for a later ZIP.
     # The run key depends only on what the site shows, this release and its ZIP list, so every upload under it has
     # fixed content and a saved ZIP count always means the same ZIPs. Two runs never write different bytes to one key.
     zip_list = ",".join(f"{z}={sums[z]}" for z in zips)  # a repaired ZIP with the same name starts fresh
@@ -448,22 +527,34 @@ def run(a, store, work):
     if done:
         print(f"Resuming after {min(done, len(zips))} of {len(zips)} ZIPs.")
     store.put(f"meta/manifests/{manifest}.csv", one(new_index, ASSET_FILES))
-    wanted = {f"Images/{rel}": rel for rel in changed}
+    changed_ids = set(ids)
+    wanted = ({path: rel for path, rel in batch_members.items() if REL.match(rel)[1] in changed_ids}
+              if batch_members is not None else {f"Images/{rel}": rel for rel in changed})
     needs = {i: {rel for rel in changed if REL.match(rel)[1] == i} for i in ids}
+    required = ({i: {f"ID{i}/{i}__{kind}.png" for kind in KINDS} for i in ids}
+                if batch_members is not None else needs)
     results, staged, unexpected, batch_file = {}, set(), [], work / "batch.json"
+    outgoing, uploads = work / "outgoing", []
+
+    def queue_upload(key, path):
+        dest = outgoing / key
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(path, dest)
+        uploads.append((key, dest))
 
     def publish_item(id_):
         rels = sorted(needs[id_])
-        check_staged(rels, staging, new)
+        check_staged(sorted(required[id_]), staging, new)
         thumbs = work / "thumbs"
         result = measure(store, [id_], rows, staging, work, by_id, thumbs)
         for rel in rels:
-            store.put(f"{prefix}Images/{rel}", staging / rel)
-            (staging / rel).unlink()
+            queue_upload(f"{prefix}Images/{rel}", staging / rel)
         for p in sorted(thumbs.iterdir()):
-            store.put(f"{prefix}thumbs/{p.name}", p)
+            queue_upload(f"{prefix}thumbs/{p.name}", p)
         shutil.rmtree(thumbs)
-        staged.difference_update(rels)
+        for rel in required[id_]:
+            (staging / rel).unlink(missing_ok=True)
+        staged.difference_update(required[id_])
         return result
 
     for n, name in enumerate(zips):
@@ -477,7 +568,8 @@ def run(a, store, work):
             for m in z.infolist():
                 rel = None if m.is_dir() else wanted.get(m.filename)
                 if rel is None:
-                    if not m.is_dir() and not (m.filename.startswith("Images/") and REL.match(m.filename[7:])):
+                    if not m.is_dir() and not ((batch_members is not None and m.filename in batch_members)
+                            or (m.filename.startswith("Images/") and REL.match(m.filename[7:]))):
                         unexpected.append(m.filename)
                     continue
                 id_ = REL.match(rel)[1]
@@ -493,10 +585,13 @@ def run(a, store, work):
                     shutil.copyfileobj(src, dst, 1 << 20)
                 staged.add(rel)
                 # An item is ready when all its changed files are unpacked. One that spans two ZIPs waits.
-                if needs[id_] <= staged:
+                if required[id_] <= staged:
                     batch.update(publish_item(id_))
                     results.update(batch)
         path.unlink()
+        store.put_many(uploads, work)
+        uploads.clear()
+        shutil.rmtree(outgoing, ignore_errors=True)
         batch_file.write_text(json.dumps(batch))
         store.put(f"{prefix}results/{n}.json", batch_file)
         # Save only when nothing waits on disk, so that a resumed run never needs files it deleted.

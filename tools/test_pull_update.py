@@ -102,6 +102,7 @@ def tool(store, source, *args, tag="second", env=None):
                           capture_output=True, text=True, env={**os.environ, **fields, **(env or {})})
 
 
+
 def state(store):
     s = json.loads((store / "meta/items.json").read_text())
     tag = store / "meta/current.txt"
@@ -144,10 +145,117 @@ def test(name):
     return wrap
 
 
+@test("bucket bulk uploads preserve bytes and MIME types before returning, and report transport failure")
+def _(t):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("pull", TOOL)
+    pull = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pull)
+    os.environ["R2_BUCKET"] = "synthetic-bucket"
+    commands = []
+    class RecordingBucket(pull.Bucket):
+        GAP = 0
+        def _run(self, *args):
+            entries = json.loads(Path(args[args.index("--filename") + 1]).read_text())
+            commands.append((args, [(e["key"], Path(e["file"]).read_bytes()) for e in entries]))
+            return subprocess.CompletedProcess(args, 1 if self.fail else 0, "", "synthetic failure")
+    bucket = RecordingBucket(t)
+    bucket.fail = False
+    a, b = t / "a.png", t / "b.webp"
+    a.write_bytes(b"png"); b.write_bytes(b"webp")
+    entries = [("r/0123456789abcdef/Images/ID00001/00001__combined.png", a),
+               ("r/0123456789abcdef/thumbs/00001_combined.webp", b)]
+    assert hasattr(bucket, "put_many"), "bucket cannot publish a checked batch"
+    bucket.put_many(entries, t)
+    assert len(commands) == 2
+    for args, uploads in commands:
+        assert args[:4] == ("r2", "bulk", "put", "synthetic-bucket") and "--remote" in args
+        mime = args[args.index("--content-type") + 1]
+        assert uploads[0][1] == (b"png" if mime == "image/png" else b"webp")
+    bucket.fail = True
+    try:
+        bucket.put_many(entries, t)
+        assert False, "failed upload was accepted"
+    except pull.StoreError:
+        pass
+
+
 def changed_art(art, id_="00002", shade=200):
     new = dict(art)
     new[id_] = triplet(shade)
     return new, {f"Images/{rel(id_, k)}": new[id_][k] for k in KINDS}
+
+
+def make_batch_release(base, art, mutate=None, corrupt_sum=None):
+    """The JSON metadata and layer folders of the replacement delivery, using synthetic art."""
+    src = base / "batch-release"
+    src.mkdir()
+    rows = []
+    batch = "Batch_01_00001-00003"
+    with zipfile.ZipFile(src / f"{batch}.zip", "w") as z:
+        for id_, trip in sorted(art.items()):
+            for kind, data in trip.items():
+                path = f"{batch}/{dict(background="Backgrounds", character="Characters", combined="Combined")[kind]}/{id_}__{kind}.png"
+                z.writestr(path, data)
+                rows.append({"ID": id_, "layer": kind, "relative_path": path,
+                             "SHA256": hashlib.sha256(data).hexdigest()})
+    if mutate:
+        mutate(rows)
+    with zipfile.ZipFile(src / "Metadata.zip", "w") as z:
+        z.writestr("Metadata/Final_Asset_Manifest.json", json.dumps(rows))
+    with zipfile.ZipFile(src / "Review.zip", "w") as z:
+        z.writestr("Review/index.html", "offline review")
+    sums = "".join(f"{'0' * 64 if p.name == corrupt_sum else hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n" for p in sorted(src.iterdir()))
+    (src / "BootyWars_SHA256SUMS_20261114.txt").write_text(sums)
+    return src
+
+
+@test("JSON batch delivery publishes matching art and thumbnails while preserving notes and unchanged art")
+def _(t):
+    store, art = make_store(t)
+    new, _ = changed_art(art)
+    r = tool(store, make_batch_release(t, new), "--apply")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "3 changed files in 1 IDs" in r.stdout and state(store)["tag"] == "second", r.stdout
+    s = shown(store)
+    for k in KINDS:
+        assert s["00002", k] == new["00002"][k] and s["00002", k, "thumb"]
+        assert s["00001", k] == art["00001"][k] and s["00001", k, "thumb"] is None
+    assert items(store)["00002"]["qc"] == "old note"
+    assert not any("Review" in p for p in files(store))
+
+
+@test("JSON batch dry run reports changed art without writes or fetching the review ZIP")
+def _(t):
+    store, art = make_store(t)
+    new, _ = changed_art(art)
+    src = make_batch_release(t, new)
+    (src / "Review.zip").unlink()
+    before = files(store)
+    r = tool(store, src)
+    assert r.returncode == 0 and "3 changed files in 1 IDs" in r.stdout, r.stderr + r.stdout
+    assert "Review.zip" not in r.stdout and files(store) == before
+
+
+@test("batch measurements use checked unchanged layers from the ZIP without downloading old images")
+def _(t):
+    import importlib.util, types
+    spec = importlib.util.spec_from_file_location("pull", TOOL)
+    pull = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pull)
+    store, art = make_store(t)
+    new = {i: dict(trip) for i, trip in art.items()}
+    new["00002"]["combined"] = triplet(200)["combined"]
+    src = make_batch_release(t, new)
+    class NoImageReads(pull.Folder):
+        def get(self, key, dest):
+            assert not key.endswith(".png"), "downloaded an unchanged layer already in the batch ZIP"
+            return super().get(key, dest)
+    work = t / "work"
+    work.mkdir()
+    args = types.SimpleNamespace(tag="second", repo=None, source=str(src), apply=True)
+    assert pull.run(args, NoImageReads(store), work) == 0
+    assert shown(store)["00002", "combined"] == new["00002"]["combined"]
 
 
 @test("dry run reports the delta and changes nothing")
@@ -227,6 +335,31 @@ def refuses(store, source, needle, tag="second"):
     assert needle in r.stderr, r.stderr
     assert shown(store) == before, "what the site shows changed"
     assert {k: v for k, v in files(store).items() if k in kept} == kept, "a published file changed"
+
+
+@test("JSON metadata and batch ZIP checksums are mandatory")
+def _(t):
+    for name in ("Metadata.zip", "Batch_01_00001-00003.zip"):
+        folder = t / name
+        folder.mkdir()
+        store, art = make_store(folder)
+        new, _ = changed_art(art)
+        refuses(store, make_batch_release(folder, new, corrupt_sum=name), "does not match SHA256SUMS")
+
+
+@test("JSON batch manifest rejects unsafe paths, mismatched identities, duplicates, missing layers and bad hashes")
+def _(t):
+    edits = [lambda r: r[0].update(relative_path="../../escaped.png"),
+             lambda r: r[0].update(ID="00002"), lambda r: r.append(dict(r[0])),
+             lambda r: r.pop(), lambda r: r[0].update(SHA256="bad"),
+             lambda r: r[0].update(layer="other"),
+             lambda r: r[0].update(relative_path=r[0]["relative_path"].replace("00001-00003", "00002-00003"))]
+    for n, edit in enumerate(edits):
+        folder = t / str(n)
+        folder.mkdir()
+        store, art = make_store(folder)
+        new, _ = changed_art(art)
+        refuses(store, make_batch_release(folder, new, mutate=edit), "batch manifest")
 
 
 @test("refuses when a changed file is missing from the ZIPs")
