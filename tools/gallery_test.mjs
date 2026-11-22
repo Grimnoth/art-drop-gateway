@@ -11,19 +11,24 @@ try { ({ reviewStatus, artVersion } = await import("./review-state.mjs")); } cat
   if (e.code !== "ERR_MODULE_NOT_FOUND") throw e;
 }
 
-function gallery({ failSave = false } = {}) {
+function gallery({ failSave = false, data, settings = {}, search = "" } = {}) {
   const nodes = new Map(), writes = [];
   const node = (id) => {
     if (!nodes.has(id)) {
       const classes = new Set();
       nodes.set(id, { value: id === "filter" ? "all" : "", style: {}, dataset: {},
-        classList: { add: (...s) => s.forEach((x) => classes.add(x)), remove: (s) => classes.delete(s), contains: (s) => classes.has(s) } });
+        classList: { add: (...s) => s.forEach((x) => classes.add(x)), remove: (s) => classes.delete(s), contains: (s) => classes.has(s),
+          toggle: (s, force) => force ? classes.add(s) : classes.delete(s) } });
     }
     return nodes.get(id);
   };
-  const context = vm.createContext({ reviewStatus, artVersion, document: { getElementById: node, querySelector: () => null },
-    localStorage: { getItem: () => "{}", setItem() {} }, scrollTo() {}, setTimeout() {},
-    fetch: async (path, options) => { writes.push({ path, body: JSON.parse(options.body) }); return { ok: !failSave, status: failSave ? 503 : 200 }; } });
+  const context = vm.createContext({ reviewStatus, artVersion, URLSearchParams, location: { search, hash: "" },
+    document: { getElementById: node, querySelector: () => null, body: node("body") },
+    localStorage: { getItem: () => JSON.stringify(settings), setItem() {} }, matchMedia: () => ({ matches: false }), scrollTo() {}, setTimeout() {},
+    fetch: async (path, options) => {
+      if (path === "/data") return { json: async () => data };
+      writes.push({ path, body: JSON.parse(options.body) }); return { ok: !failSave, status: failSave ? 503 : 200 };
+    } });
   vm.runInContext(script, context);
   vm.runInContext(`ME="Ada"; items=[{id:"00001"},{id:"00002"},{id:"00003"}];
     byId=Object.fromEntries(items.map(d=>[d.id,d])); list=items;
@@ -33,6 +38,43 @@ function gallery({ failSave = false } = {}) {
     TRIAGE={"00001":{status:"fixed",at:2}};`, context);
   return { run: (code) => vm.runInContext(code, context), node, writes };
 }
+
+const deliveryData = {
+  me: "Ada", verdicts: {}, triage: {}, updates: {},
+  items: [
+    { id: "00001", type: "Pirate", traits: { Hat: "Cap" }, upd: { tag: "delivery-2026-11-21", at: 20 } },
+    { id: "00002", type: "Shark", traits: { Hat: "Crown" }, upd: { tag: "delivery-2026-11-21", at: 20 } },
+    { id: "00003", type: "Pirate", upd: { tag: "delivery-2026-11-14", at: 10 } },
+  ],
+};
+
+test("the delivery filter shows only the latest batch", async () => {
+  const g = gallery({ data: deliveryData });
+  await g.run("init()");
+  assert.match(g.node("filter").innerHTML, /Delivery 2026-11-21 \(2\)/);
+  g.node("filter").value = "delivery";
+  g.run("compute()");
+  assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002");
+});
+
+test("a delivery link opens exactly that batch without saved type or trait filters", async () => {
+  const g = gallery({ data: deliveryData, search: "?delivery=delivery-2026-11-21",
+    settings: { f: "all", ty: "Pirate", tr: { Hat: "Cap" }, page: 5 } });
+  await g.run("init()");
+  assert.equal(g.node("filter").value, "delivery");
+  assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002");
+  assert.equal(g.run("page"), 0);
+  assert.match(g.node("stats").textContent, /You: 0 of 2 reviewed/);
+});
+
+test("a link to an older or missing delivery does not show a newer batch", async () => {
+  for (const [tag, ids] of [["delivery-2026-11-14", "00003"], ["delivery-2026-11-07", ""]]) {
+    const g = gallery({ data: deliveryData, search: "?delivery=" + tag });
+    await g.run("init()");
+    assert.equal(g.node("filter").value, "delivery");
+    assert.equal(g.run('list.map(d=>d.id).join(",")'), ids);
+  }
+});
 
 test("changed flagged art needs re-review while unchanged flags and unflagged art do not", () => {
   const g = gallery();
