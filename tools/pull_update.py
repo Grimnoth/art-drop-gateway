@@ -32,6 +32,8 @@ REL = re.compile(r"^ID(\d{5})/\1__(character|background|combined)\.png$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 ASSET_FILES, ID_MANIFEST = "ASSET_FILES*.csv", "ID_DELIVERY_MANIFEST*.csv"
 KINDS = ("character", "background", "combined")
+BATCH_PATH = re.compile(r"(Batch_\d+_(\d{5})-(\d{5}))/(Backgrounds|Characters|Combined)/(\d{5})__(background|character|combined)\.png")
+LAYER_DIRS = {"background": "Backgrounds", "character": "Characters", "combined": "Combined"}
 STATE = "meta/items.json"
 # The first upload (tools/upload.sh) writes meta/items.json as a bare list, the release to meta/current.txt and
 # the manifest to meta/index/. The first publish reads that layout once and writes its own.
@@ -294,10 +296,8 @@ def extract_batch_manifest(zip_path, dest, names, sums):
         if (not isinstance(id_, str) or not re.fullmatch(r"\d{5}", id_) or kind not in KINDS
                 or not isinstance(path, str) or not isinstance(digest, str) or not HEX64.fullmatch(digest)):
             raise Refuse("bad batch manifest identity or checksum")
-        match = re.fullmatch(r"(Batch_\d+_(\d{5})-(\d{5}))/(Backgrounds|Characters|Combined)/(\d{5})__(background|character|combined)\.png", path)
-        directory = {"background": "Backgrounds", "character": "Characters", "combined": "Combined"}[kind]
-        if (not match or match[5] != id_ or match[6] != kind or match[4] != directory
-                or not match[2] <= id_ <= match[3]):
+        match = batch_path(path, id_, kind)
+        if not match:
             raise Refuse("batch manifest path does not match its ID, layer or range")
         archive = f"{match[1]}.zip"
         if archive not in names or archive not in sums:
@@ -323,6 +323,57 @@ def extract_batch_manifest(zip_path, dest, names, sums):
             writer.writeheader()
             writer.writerows(records)
     return members
+
+
+def batch_path(path, id_, kind):
+    match = BATCH_PATH.fullmatch(path or "")
+    if (match and match[5] == id_ and match[6] == kind and match[4] == LAYER_DIRS[kind]
+            and match[2] <= id_ <= match[3]):
+        return match
+    return None
+
+
+def correction_manifest(source, tag, archive, expected_ids, names, old, work, dest):
+    index, checksum = "FILE_INDEX.csv", f"{archive}.sha256"
+    if not {archive, index, checksum}.issubset(names):
+        raise Refuse("the correction release needs the selected ZIP, its SHA256 file and FILE_INDEX.csv")
+    sums = read_sums(source.fetch(tag, checksum, work))
+    if set(sums) != {archive}:
+        raise Refuse("the correction checksum file must name only the selected ZIP")
+
+    assets, members, ids = dict(old), {}, {}
+    for row in read_csv(source.fetch(tag, index, work)):
+        id_, kind, path, digest = (row.get(k) for k in ("ID", "Layer", "Replacement path", "SHA256"))
+        if kind not in KINDS or not batch_path(path, id_, kind) or not HEX64.fullmatch(digest or ""):
+            raise Refuse("invalid identity, path or SHA256 in the correction index")
+        rel = f"ID{id_}/{id_}__{kind}.png"
+        if rel not in old:
+            raise Refuse("a correction must replace a file in the existing manifest")
+        layers = ids.setdefault(id_, set())
+        if kind in layers:
+            raise Refuse("a correction repeats an ID and layer")
+        layers.add(kind)
+        members[path], assets[rel] = rel, digest
+    if len(ids) != expected_ids:
+        raise Refuse(f"expected {expected_ids} correction IDs, found {len(ids)}")
+    if any(layers != set(KINDS) for layers in ids.values()):
+        raise Refuse("every correction must include all three layers")
+
+    dest.mkdir()
+    items = {}
+    with (dest / "ASSET_FILES.csv").open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["relative_path", "sha256"])
+        for rel, digest in sorted(assets.items()):
+            id_, kind = REL.fullmatch(rel).groups()
+            writer.writerow([rel, digest])
+            item = items.setdefault(id_, {"ID": id_})
+            item[f"{kind}_relative_path"], item[f"{kind}_sha256"] = rel, digest
+    with (dest / "ID_DELIVERY_MANIFEST.csv").open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["ID"] + [f"{k}_{field}" for k in KINDS for field in ("relative_path", "sha256")])
+        writer.writeheader()
+        writer.writerows(items.values())
+    return sums, members
 
 
 def check_manifests_agree(new, new_index):
@@ -425,14 +476,14 @@ def measure(store, ids, rows, staging, work, by_id, thumbs):
     return results
 
 
-def patch_items(by_id, rows, results, changed, prefix, tag, at):
+def patch_items(by_id, rows, results, changed, prefix, tag, at, *, refresh_fields):
     """Point changed items at their new files, and refresh delivery notes for all and measurements for changed."""
     # Each project decides which manifest columns the gallery shows, in its own tools/site_fields.py
     # (or the file that SITE_FIELDS names). tools/site_fields.example.py shows the shape.
     fields = Path(os.environ.get("SITE_FIELDS") or TOOLS / "site_fields.py")
-    if os.environ.get("SITE_FIELDS") and not fields.is_file():
+    if refresh_fields and os.environ.get("SITE_FIELDS") and not fields.is_file():
         raise Refuse(f"SITE_FIELDS names {fields}, which is not a file. Use an absolute path.")
-    if fields.exists():
+    if refresh_fields and fields.exists():
         refresh = load_module("site_fields", fields).refresh
         for id_, row in rows.items():
             if id_ in by_id:
@@ -464,7 +515,10 @@ def run(a, store, work):
     state, old = load_state(store, work)
     current = state["tag"]
     mask(current)
-    if tag == current:
+    archive = getattr(a, "corrections", None)
+    if archive and current != a.base_tag:
+        raise Refuse("the live full-delivery baseline does not match the requested baseline")
+    if not archive and tag == current:
         print(f"{tag} is the published delivery. Nothing to do.")
         return 0
 
@@ -473,20 +527,23 @@ def run(a, store, work):
         folder.mkdir()
     names = source.assets(tag)
     mask(*names)
-    # Accept the delivery's project prefix as well as the original checksum names.
-    sum_files = [n for n in names if re.fullmatch(r"(?:[\w.-]+_)?SHA256SUMS[\w.-]*\.txt", n)]
-    if len(sum_files) != 1:
-        raise Refuse(f"the release needs one SHA256SUMS file, found {sum_files or 'none'}")
-    sums = read_sums(source.fetch(tag, sum_files[0], download))
-    index_zip = [n for n in names if n.endswith(".zip") and ("index" in n.lower() or n == "Metadata.zip")]
-    if len(index_zip) != 1:
-        raise Refuse(f"expected one index ZIP, found {index_zip}")
-    index_path = fetch_verified(source, tag, index_zip[0], download, sums)
     batch_members = None
-    if index_zip[0] == "Metadata.zip":
-        batch_members = extract_batch_manifest(index_path, new_index, names, sums)
+    if archive:
+        sums, batch_members = correction_manifest(source, tag, archive, a.expected_ids, names, old, download, new_index)
     else:
-        extract_index(index_path, new_index)
+        # Accept the delivery's project prefix as well as the original checksum names.
+        sum_files = [n for n in names if re.fullmatch(r"(?:[\w.-]+_)?SHA256SUMS[\w.-]*\.txt", n)]
+        if len(sum_files) != 1:
+            raise Refuse(f"the release needs one SHA256SUMS file, found {sum_files or 'none'}")
+        sums = read_sums(source.fetch(tag, sum_files[0], download))
+        index_zip = [n for n in names if n.endswith(".zip") and ("index" in n.lower() or n == "Metadata.zip")]
+        if len(index_zip) != 1:
+            raise Refuse(f"expected one index ZIP, found {index_zip}")
+        index_path = fetch_verified(source, tag, index_zip[0], download, sums)
+        if index_zip[0] == "Metadata.zip":
+            batch_members = extract_batch_manifest(index_path, new_index, names, sums)
+        else:
+            extract_index(index_path, new_index)
 
     new = load_assets(new_index)
     changed, removed = diff(old, new)
@@ -495,13 +552,17 @@ def run(a, store, work):
     check_manifests_agree(new, new_index)
     manifest = sha(one(new_index, ASSET_FILES))
     ids = sorted({REL.match(rel)[1] for rel in changed})
-    zips = choose_zips(names, changed, new_index) if changed else []
+    if archive:
+        mask(*ids)
+    zips = ([archive] if archive else choose_zips(names, changed, new_index)) if changed else []
     print(f"{tag}: {len(changed)} changed files in {len(ids)} IDs. {len(new) - len(changed)} unchanged. Published now: {current}.")
     if ids and os.environ.get("GITHUB_ACTIONS") != "true":  # public logs get the counts only
         print("IDs:", " ".join(ids[:50]) + (" ..." if len(ids) > 50 else ""))
         print("ZIPs needed:", " ".join(zips) or "none")
     if not a.apply:
         print("Dry run. Nothing changed. Add --apply to publish.")
+        return 0
+    if archive and not changed:
         return 0
     if changed and not zips:
         raise Refuse("files changed, but the release has no image ZIP")
@@ -565,6 +626,10 @@ def run(a, store, work):
             continue
         path, batch = fetch_verified(source, tag, name, download, sums), {}
         with zipfile.ZipFile(path) as z:
+            if archive:
+                images = [m.filename for m in z.infolist() if not m.is_dir() and m.filename.lower().endswith(".png")]
+                if len(images) != len(batch_members) or set(images) != set(batch_members):
+                    raise Refuse("the correction ZIP does not contain exactly the indexed PNGs")
             for m in z.infolist():
                 rel = None if m.is_dir() else wanted.get(m.filename)
                 if rel is None:
@@ -605,8 +670,9 @@ def run(a, store, work):
     if missing:
         raise Refuse(f"{len(missing)} changed files are missing or fail their checksum, first: {missing[:5]}")
 
-    patch_items(by_id, rows, results, changed, prefix, tag, int(time.time()))
-    state.update(tag=tag, manifest=manifest)
+    patch_items(by_id, rows, results, changed, prefix, tag, int(time.time()), refresh_fields=not archive)
+    # Keep the upstream tag so the scheduled full-delivery pull does not undo these corrections.
+    state.update(tag=current if archive else tag, manifest=manifest)
     path = work / "state.json"
     path.write_text(json.dumps(state, separators=(",", ":")))
     # This one write switches the site to the new release. Before it, the site shows the old release, whole.
@@ -619,7 +685,8 @@ def run(a, store, work):
 
     bad = [i for i, r in results.items() if r.get("composite_diff") in ("", None) or float(r["composite_diff"]) > MISMATCH]
     if bad:
-        print(f"WARNING: {len(bad)} IDs have a combined image that differs from background + character: {bad[:20]}")
+        shown = "" if os.environ.get("GITHUB_ACTIONS") == "true" else f": {bad[:20]}"
+        print(f"WARNING: {len(bad)} IDs have a combined image that differs from background + character{shown}")
     print(f"Published {tag}: {len(changed)} files in {len(ids)} items. The replaced files stay in the bucket.")
     return 0
 
@@ -631,7 +698,16 @@ def main():
     p.add_argument("--repo", help="the artist's repo, owner/name. Default: DELIVERY_REPO")
     p.add_argument("--source", help="read the release from this folder, for tests")
     p.add_argument("--store", help="use this folder instead of the live bucket, for tests")
+    p.add_argument("--corrections", metavar="ZIP", help="overlay this corrections-only release asset")
+    p.add_argument("--base-tag", help="required live full-delivery tag for a corrections overlay")
+    p.add_argument("--expected-ids", type=int, help="required number of correction IDs")
     a = p.parse_args()
+    if a.corrections:
+        if (not a.tag or not a.base_tag or not TAG.fullmatch(a.base_tag) or not a.expected_ids or a.expected_ids < 1
+                or not re.fullmatch(r"[\w.-]+\.zip", a.corrections)):
+            p.error("corrections require an explicit tag, a ZIP filename, --base-tag and a positive --expected-ids")
+    elif a.base_tag is not None or a.expected_ids is not None:
+        p.error("--base-tag and --expected-ids are used only with --corrections")
     work = Path(tempfile.mkdtemp(prefix="gateway-pull-"))
     try:
         load_env()
