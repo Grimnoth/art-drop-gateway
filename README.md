@@ -100,6 +100,17 @@ remain when the replacement manifest supplies no new notes.
 The update refuses, and the site does not change, when a manifest drops a file, the two manifests disagree, a
 row names another item's file, a file fails its checksum, or an image cannot be read.
 
+A corrections-only release can replace files in the live manifest. Supply the selected ZIP, its
+`<ZIP filename>.sha256` file, and a separate `FILE_INDEX.csv` with `ID`, `Layer`, `Replacement path`,
+and `SHA256` columns. Each listed ID needs all three layers in the batch paths above. The updater
+keeps the full-delivery tag so the scheduled pull of that same release leaves the corrections in place.
+
+In the repository secrets, set `CORRECTION_DELIVERY` to a JSON object with `repo`, `tag`, `archive`,
+`baseline` (the full delivery currently live), and `count` (the number of IDs in the correction).
+Set `CORRECTION_REPO_TOKEN` if the regular delivery token cannot read that repo. Dispatch **Pull the
+artist's art** with **Overlay the configured correction delivery**. Select **Only report what changed**
+for a preview that reads the index without downloading the artwork.
+
 ## Project fields
 
 The gallery shows extra facts and filters when items carry them: a delivery note, a chosen set, a provisional

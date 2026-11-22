@@ -717,5 +717,88 @@ def _(t):
     assert files(store) == before
 
 
+def make_corrections(base, id_, triplet_, *, omit="", duplicate=False, bad_digest=False):
+    src = base / "correction-release"
+    src.mkdir()
+    archive = src / "Corrections.zip"
+    with zipfile.ZipFile(archive, "w") as z, (src / "FILE_INDEX.csv").open("w", encoding="utf-8-sig") as index:
+        writer = csv.writer(index)
+        writer.writerow(["ID", "Layer", "Replacement path", "SHA256"])
+        for kind, directory in zip(KINDS, ("Characters", "Backgrounds", "Combined")):
+            path = f"Batch_01_00001-00099/{directory}/{id_}__{kind}.png"
+            data = triplet_[kind]
+            if kind != omit:
+                z.writestr(path, data)
+            row = [id_, kind, path, "0" * 64 if bad_digest and kind == "combined" else hashlib.sha256(data).hexdigest()]
+            writer.writerow(row)
+            if duplicate and kind == "combined":
+                writer.writerow(row)
+        z.writestr("Instructions.txt", "Synthetic package")
+    (src / f"{archive.name}.sha256").write_text(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n")
+    return src
+
+
+def correction_args(*, baseline="first", count="1"):
+    return ("--corrections", "Corrections.zip", "--base-tag", baseline, "--expected-ids", count)
+
+
+@test("a correction overlays existing files, preserves notes, and survives a nightly rerun")
+def _(t):
+    store, art = make_store(t)
+    updated = triplet(201)
+    updated["background"] = art["00002"]["background"]
+    src = make_corrections(t, "00002", updated)
+    before = files(store)
+    dry = tool(store, src, *correction_args(), tag="correction")
+    assert dry.returncode == 0 and "2 changed files in 1 IDs" in dry.stdout, dry.stderr + dry.stdout
+    assert files(store) == before
+    r = tool(store, src, *correction_args(), "--apply", tag="correction")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert state(store)["tag"] == "first"
+    assert items(store)["00002"]["upd"]["tag"] == "correction"
+    assert items(store)["00002"]["qc"] == "old note", "the overlay has no replacement for the original note"
+    assert items(store)["00001"]["size"] == "old"
+    for kind in KINDS:
+        assert shown(store)["00002", kind] == updated[kind]
+        assert shown(store)["00002", kind, "thumb"]
+        assert shown(store)["00001", kind] == art["00001"][kind]
+    published = files(store)
+    original = make_release(t, art, {})
+    assert tool(store, original, "--apply", tag="first").returncode == 0
+    assert tool(store, src, *correction_args(), "--apply", tag="correction").returncode == 0
+    assert files(store) == published
+
+
+@test("correction preview refuses an unexpected base, count, or unknown item without writing")
+def _(t):
+    store, _ = make_store(t)
+    src = make_corrections(t, "00002", triplet(201))
+    unknown = t / "unknown"
+    unknown.mkdir()
+    foreign = make_corrections(unknown, "00004", triplet(201))
+    before = files(store)
+    for source, args, reason in (
+        (src, correction_args(baseline="other"), "baseline"),
+        (src, correction_args(count="2"), "expected 2"),
+        (foreign, correction_args(), "existing"),
+    ):
+        r = tool(store, source, *args, tag="correction")
+        assert r.returncode == 2 and reason in r.stderr, r.stderr + r.stdout
+    assert files(store) == before
+
+
+@test("duplicate, missing, or corrupt correction layers cannot change the live catalog")
+def _(t):
+    store, _ = make_store(t)
+    before = shown(store)
+    for n, kwargs in enumerate(({"duplicate": True}, {"omit": "background"}, {"bad_digest": True})):
+        fixture = t / str(n)
+        fixture.mkdir()
+        src = make_corrections(fixture, "00002", triplet(201), **kwargs)
+        r = tool(store, src, *correction_args(), "--apply", tag="correction")
+        assert r.returncode == 2 and "REFUSED" in r.stderr, r.stderr + r.stdout
+        assert shown(store) == before
+
+
 print(f"{failures} FAILED" if failures else "all passed")
 sys.exit(1 if failures else 0)
