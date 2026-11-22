@@ -13,6 +13,7 @@ try { ({ reviewStatus, artVersion } = await import("./review-state.mjs")); } cat
 
 function gallery({ failSave = false, data, settings = {}, search = "" } = {}) {
   const nodes = new Map(), writes = [];
+  let saved = JSON.stringify(settings);
   const node = (id) => {
     if (!nodes.has(id)) {
       const classes = new Set();
@@ -24,7 +25,8 @@ function gallery({ failSave = false, data, settings = {}, search = "" } = {}) {
   };
   const context = vm.createContext({ reviewStatus, artVersion, URLSearchParams, location: { search, hash: "" },
     document: { getElementById: node, querySelector: () => null, body: node("body") },
-    localStorage: { getItem: () => JSON.stringify(settings), setItem() {} }, matchMedia: () => ({ matches: false }), scrollTo() {}, setTimeout() {},
+    localStorage: { getItem: () => saved, setItem: (_key, value) => { saved = value; } },
+    matchMedia: () => ({ matches: false }), scrollTo() {}, setTimeout() {},
     fetch: async (path, options) => {
       if (path === "/data") return { json: async () => data };
       writes.push({ path, body: JSON.parse(options.body) }); return { ok: !failSave, status: failSave ? 503 : 200 };
@@ -36,7 +38,7 @@ function gallery({ failSave = false, data, settings = {}, search = "" } = {}) {
       "00002":{Ada:{by:"Ada",verdict:"flag",reasons:["Cut off"],note:"Keep this",at:1}}};
     UPD={"00001":{tag:"new-delivery",kinds:["character"],at:10},"00003":{tag:"new-delivery",kinds:["background"],at:10}};
     TRIAGE={"00001":{status:"fixed",at:2}};`, context);
-  return { run: (code) => vm.runInContext(code, context), node, writes };
+  return { run: (code) => vm.runInContext(code, context), node, writes, savedSettings: () => JSON.parse(saved) };
 }
 
 const deliveryData = {
@@ -74,6 +76,15 @@ test("a link to an older or missing delivery does not show a newer batch", async
     assert.equal(g.node("filter").value, "delivery");
     assert.equal(g.run('list.map(d=>d.id).join(",")'), ids);
   }
+});
+
+test("opening and paging through a delivery link preserves the regular gallery queue", async () => {
+  const settings = { f: "all", ty: "Pirate", tr: { Hat: "Cap" }, page: 5 };
+  const g = gallery({ data: deliveryData, search: "?delivery=delivery-2026-11-21", settings });
+  await g.run("init()");
+  g.run("goPage(0)");
+  const { f, ty, tr, page } = g.savedSettings();
+  assert.deepEqual({ f, ty, tr, page }, settings);
 });
 
 test("changed flagged art needs re-review while unchanged flags and unflagged art do not", () => {

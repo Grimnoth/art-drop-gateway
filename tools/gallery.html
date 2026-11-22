@@ -269,7 +269,12 @@ const FILTERS={
 const MISMATCH=3;
 const hash=(id)=>{let h=2166136261;for(const c of id)h=Math.imul(h^c.charCodeAt(0),16777619);return h>>>0};
 function state(){try{return JSON.parse(localStorage.getItem("bw")||"{}")}catch{return{}}}
-function saveState(){try{localStorage.setItem("bw",JSON.stringify({me:ME,f:$("filter").value,ty:$("type").value,s:$("sort").value,v:$("view").value,t:$("tile").value,tr:TR,page}))}catch{}}
+function saveState(){
+ try {
+  const queue = linkedDelivery ? state() : {f:$("filter").value,ty:$("type").value,tr:TR,page};
+  localStorage.setItem("bw", JSON.stringify({...queue,me:ME,s:$("sort").value,v:$("view").value,t:$("tile").value}));
+ } catch {}
+}
 async function post(batch,path="/verdict"){
  try{const r=await fetch(path,{method:"POST",body:JSON.stringify(batch.map(b=>({...b,by:ME,catalog_version:CATALOG})))});if(!r.ok)throw new Error(r.status==409?"The art changed. Reload the gallery before saving":r.status);}
  catch(e){toast("Not saved: "+e.message+". Check the server.");throw e}
