@@ -216,6 +216,9 @@ const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 let TR={},TCOUNT={};
 let items=[],byId={},ALL={},TRIAGE={},UPD={},ME="",CATALOG="",list=[],page=0,cur=0,dLayer="combined",dReasons=new Set();
+const requestedDelivery = new URLSearchParams(location.search).get("delivery") || "";
+const linkedDelivery = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/.test(requestedDelivery) ? requestedDelivery : "";
+let deliveryTag = linkedDelivery;
 // The artist reads flags and does not review. The name comes from the login.
 // Display words come from the Worker's settings (wrangler.toml [vars]), so one page serves any project.
 let CFG={title:"Art Review",noun:"Item",nouns:"items",artist:"Artist",chosen:"Chosen",others:"Not chosen",othersTag:"N"},HASCHOSEN=false;
@@ -242,6 +245,7 @@ const needsReReview=id=>stOf(id)=="rereview";
 // True when this item's art changed after my last review, or I have not reviewed it since.
 const stale=id=>!!UPD[id]&&(!mine(id)||mine(id).verdict=="clear"||mine(id).art_version!==artVersion(UPD[id]));
 const FILTERS={
+ delivery:[()=>`Delivery ${deliveryTag.replace(/^delivery-/, "")}`, d=>!!deliveryTag && UPD[d.id]?.tag===deliveryTag],
  rereview:["Flagged art, needs re-review",d=>needsReReview(d.id)],
  updated:["Updated, needs my look",d=>stale(d.id)],
  roster:[()=>CFG.chosen,d=>d.mint],
@@ -265,7 +269,12 @@ const FILTERS={
 const MISMATCH=3;
 const hash=(id)=>{let h=2166136261;for(const c of id)h=Math.imul(h^c.charCodeAt(0),16777619);return h>>>0};
 function state(){try{return JSON.parse(localStorage.getItem("bw")||"{}")}catch{return{}}}
-function saveState(){try{localStorage.setItem("bw",JSON.stringify({me:ME,f:$("filter").value,ty:$("type").value,s:$("sort").value,v:$("view").value,t:$("tile").value,tr:TR,page}))}catch{}}
+function saveState(){
+ try {
+  const queue = linkedDelivery ? state() : {f:$("filter").value,ty:$("type").value,tr:TR,page};
+  localStorage.setItem("bw", JSON.stringify({...queue,me:ME,s:$("sort").value,v:$("view").value,t:$("tile").value}));
+ } catch {}
+}
 async function post(batch,path="/verdict"){
  try{const r=await fetch(path,{method:"POST",body:JSON.stringify(batch.map(b=>({...b,by:ME,catalog_version:CATALOG})))});if(!r.ok)throw new Error(r.status==409?"The art changed. Reload the gallery before saving":r.status);}
  catch(e){toast("Not saved: "+e.message+". Check the server.");throw e}
@@ -302,17 +311,19 @@ function render(){
 const flagBtn=id=>{const on=mine(id)?.verdict=="flag";return `<button class="fl${on?" on":""}" title="${on?"Remove my flag":"Flag"}" aria-label="${on?"Remove my flag from":"Flag"} ${id}" aria-pressed="${on}">&#9873;</button>`};
 function paintTile(id){const el=document.querySelector(`.tile[data-id="${id}"]`);if(el){const c=el.classList.contains("cur");el.className=tileClass(byId[id])+(c?" cur":"");el.dataset.flags=flagText(id);el.querySelector(".fl").outerHTML=flagBtn(id);el.querySelector(".tags").innerHTML=tileTags(byId[id])}}
 function stats(){
- // Progress counts the chosen set when the data has one, and every item when it does not.
- const pool=HASCHOSEN?items.filter(d=>d.mint):items;
+ const reviewingDelivery = $("filter").value === "delivery";
+ const countingChosen = HASCHOSEN && !reviewingDelivery;
+ const pool = reviewingDelivery ? items.filter(FILTERS.delivery[1]) : countingChosen ? items.filter(d=>d.mint) : items;
  let ok=0,fl=0;for(const d of pool){if(stale(d.id))continue;const v=mine(d.id)?.verdict;if(v=="ok")ok++;else if(v=="flag")fl++}
- const total=pool.length,n=total||1,any=items.filter(d=>flaggers(d.id).length).length;
- $("stats").textContent=`You: ${ok+fl} of ${total}${HASCHOSEN?" chosen":""} reviewed. Everyone: ${any} flagged.`;
+ const total=pool.length,n=total||1,any=(reviewingDelivery?pool:items).filter(d=>flaggers(d.id).length).length;
+ $("stats").textContent=`You: ${ok+fl} of ${total}${countingChosen?" chosen":""} reviewed. Everyone: ${any} flagged.`;
  $("pOk").style.width=ok/n*100+"%";$("pFlag").style.width=fl/n*100+"%";
 }
 // Filters for reviewers' own actions always show. Filters that depend on fields in the data show when they match.
 const ALWAYS=new Set(["rereview","updated","flag","mine","split","send","ok","all"]);
 function fillFilters(){
- const shown=Object.entries(FILTERS).map(([k,[n,f]])=>[k,typeof n=="function"?n():n,items.filter(f).length]).filter(([k,,c])=>c||ALWAYS.has(k));
+ const shown=Object.entries(FILTERS).map(([k,[n,f]])=>[k,typeof n=="function"?n():n,items.filter(f).length])
+  .filter(([k,,c])=>c||ALWAYS.has(k)||(k==="delivery"&&linkedDelivery));
  // Keep the current filter while it still shows. One that ran out of matches falls back to the default.
  const keys=new Set(shown.map(([k])=>k)),cur=$("filter").value;
  const v=keys.has(cur)?cur:keys.has("roster")?"roster":"all";
@@ -394,16 +405,33 @@ async function init(){
  const r=await(await fetch("/data")).json();// Every ID goes into markup and URLs unescaped, so the page keeps only the five-digit IDs that the whole system uses.
  items=(Array.isArray(r.items)?r.items:r.items.items).filter(d=>/^\d{5}$/.test(d.id));ALL=r.verdicts;TRIAGE=r.triage;CATALOG=r.catalog_version;
  UPD={...r.updates};for(const d of items)if(d.upd)UPD[d.id]=d.upd;
+ if (!linkedDelivery) {
+  let latest = null;
+  for (const d of items) {
+   const update = UPD[d.id];
+   if (typeof update?.tag === "string" && update.tag &&
+       (!latest || update.at > latest.at || (update.at === latest.at && update.tag > latest.tag))) latest = update;
+  }
+  deliveryTag = latest?.tag || "";
+ }
  CFG={...CFG,...r.config};HASCHOSEN=items.some(d=>d.mint);applyConfig();byId=Object.fromEntries(items.map(d=>[d.id,d]));
  for(const d of items)for(const [k,v] of Object.entries(d.traits||{}))TCOUNT[k+"\u0000"+v]=(TCOUNT[k+"\u0000"+v]||0)+1;
  fillFilters();
  const types=[...new Set(items.map(d=>d.type).filter(Boolean))].sort();
  $("type").style.display=types.length?"":"none";
  $("type").innerHTML=`<option value="">All types</option>`+types.map(t=>`<option>${esc(t)}</option>`).join("");
- const s=state();if(s.f&&FILTERS[s.f])$("filter").value=s.f;if(s.ty!=null)$("type").value=s.ty;if(s.s)$("sort").value=s.s;if(s.v)$("view").value=s.v;if(s.t){$("tile").value=s.t;document.documentElement.style.setProperty("--tile",s.t+"px")}
- if(s.tr&&typeof s.tr=="object")TR=s.tr;paintTChips();
+ const s=state();
+ if (linkedDelivery) {
+  $("filter").value = "delivery";
+ } else {
+  if (s.f && Object.hasOwn(FILTERS, s.f)) $("filter").value = s.f;
+  if (s.ty != null) $("type").value = s.ty;
+  if (s.tr && typeof s.tr === "object") TR = s.tr;
+ }
+ if(s.s)$("sort").value=s.s;if(s.v)$("view").value=s.v;if(s.t){$("tile").value=s.t;document.documentElement.style.setProperty("--tile",s.t+"px")}
+ paintTChips();
  // A hosted login sets the reviewer. Only the local server asks for a name.
- ME=r.me||s.me||"";document.body.classList.toggle("artist",isArtist());fillFilters();compute();page=s.page||0;render();
+ ME=r.me||s.me||"";document.body.classList.toggle("artist",isArtist());fillFilters();compute();page=linkedDelivery?0:s.page||0;render();
  if(ME)$("whobtn").textContent=ME;else askWho();
  if(r.me)$("whobtn").disabled=true;
  if(isArtist()||location.hash=="#artist")openArtist();
