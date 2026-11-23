@@ -53,6 +53,7 @@ nav{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:cente
 #vampire-review h2{margin:0 0 8px;font-size:20px}
 #vampire-review .row+.row{margin-top:10px}
 body.comparison header,body.comparison #helpbox,body.comparison #good{display:none}
+body.artist #comparison-fixes{display:none}
 body.comparison main{max-width:940px;margin:auto}
 body.comparison #grid{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
 .comparison-card{min-width:0;padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
@@ -61,9 +62,10 @@ body.comparison #grid{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
 .comparison-images figure{margin:0;min-width:0}
 .comparison-images figcaption{margin-bottom:6px}
 .comparison-images img{display:block;width:100%;height:auto;aspect-ratio:1;object-fit:contain;background:var(--bg);border-radius:6px}
+.comparison-placeholder{display:grid;place-items:center;aspect-ratio:1;border:1px dashed var(--line);border-radius:6px;color:var(--dim);padding:12px;text-align:center}
 .comparison-actions{margin-top:12px;align-items:center}
 .comparison-actions [role=status]{margin-right:auto}
-@media(max-width:620px){.comparison-images{grid-template-columns:minmax(0,1fr)}.comparison-card{padding:10px}}
+@media(max-width:620px){.comparison-images{grid-template-columns:minmax(0,1fr)}.comparison-card{padding:10px}.comparison-placeholder{aspect-ratio:auto;min-height:52px}}
 #bcompare{grid-column:1/-1}
 #bcompare summary{cursor:pointer;padding:10px 0}
 #bcompare figure{margin:12px 0 20px;max-width:650px}
@@ -189,7 +191,7 @@ body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.
 <main>
  <section id="vampire-review" hidden><h2>Vampire review</h2>
   <div class="row" id="vampire-filters" aria-label="Vampire review filters"></div>
-  <div class="row"><label>Compare <select id="comparison-layer"><option value="combined">Full images</option><option value="background">Backgrounds only</option></select></label><a href="/">Back to all art</a></div>
+  <div class="row"><label>Compare <select id="comparison-layer"><option value="combined">Full images</option><option value="background">Backgrounds only</option></select></label><button id="comparison-fixes">Fix list</button><a href="/">Back to all art</a></div>
  </section>
  <a id="vampire-review-link" href="/?backgrounds=all" hidden>Vampire review</a>
  <details id="helpbox"><summary>How to review</summary><p id="help"></p></details>
@@ -260,6 +262,7 @@ const linkedQueue = linkedDelivery || backgroundQueue;
 const pageSize = backgroundQueue ? 12 : PAGE;
 let backgroundArchive = null, backgroundIds = new Set(), backgroundSelections = {}, backgroundLayer = "background";
 const choosingBackground = new Set();
+const flaggingComparison = new Set();
 let deliveryTag = linkedDelivery;
 // The artist reads flags and does not review. The name comes from the login.
 // Display words come from the Worker's settings (wrangler.toml [vars]), so one page serves any project.
@@ -340,9 +343,10 @@ async function post(batch,path="/verdict"){
 function toast(t){$("toast").textContent=t;$("toast").style.display="block";setTimeout(()=>$("toast").style.display="none",5000)}
 async function setV(id,verdict,reasons=[],note=""){
  const prev=mine(id),rec={id,by:ME,verdict,reasons,note,art_version:artVersion(reviewUpdate(id)),at:Math.floor(Date.now()/1000)};
- (ALL[id]??={})[ME]=rec;paintTile(id);stats();
- try{await post([rec]);fillFilters();compute();render();return true}
- catch{if(prev)ALL[id][ME]=prev;else delete ALL[id][ME];paintTile(id);stats();return false}
+ const repaint=()=>{paintTile(id);if(backgroundQueue)paintComparisonFlag(id);stats()};
+ (ALL[id]??={})[ME]=rec;repaint();
+ try{await post([rec]);if(!backgroundQueue){fillFilters();compute();render()}return true}
+ catch{if(prev)ALL[id][ME]=prev;else delete ALL[id][ME];repaint();return false}
 }
 function compute(){
  const f=FILTERS[$("filter").value][1],s=$("sort").value,ty=$("type").value;
@@ -365,15 +369,41 @@ function comparisonChoice(d){
   label:previous?"Use the night version":"I prefer the previous version",
  };
 }
+const flaggedForChange=id=>mine(id)?.verdict==="flag";
+const comparisonFlagLabel=id=>flaggedForChange(id)?"Remove flag":"Flag for change";
+const comparisonFlagStatus=id=>flaggedForChange(id)?"Flagged for change":"";
+function paintComparisonFlag(id){
+ const button=$("comparison-flag-"+id);
+ if(!button)return;
+ button.disabled=flaggingComparison.has(id);
+ button.textContent=comparisonFlagLabel(id);
+ button.setAttribute("aria-pressed",String(flaggedForChange(id)));
+ $("comparison-status-"+id).textContent=comparisonFlagStatus(id);
+}
+async function flagComparison(id){
+ if(isArtist()||!backgroundIds.has(id)||deliveryChanged(byId[id])||flaggingComparison.has(id))return;
+ const review=mine(id);
+ flaggingComparison.add(id);
+ try{
+  if(flaggedForChange(id))await setV(id,"clear");
+  else await setV(id,"flag",review?.reasons||[],review?.note||"");
+ }finally{
+  flaggingComparison.delete(id);
+  paintComparisonFlag(id);
+ }
+}
 function comparisonCard(d){
  const option=backgroundOption(d,backgroundArchive);
+ const unchanged=backgroundIds.has(d.id)&&!deliveryChanged(d);
  const layer=$("comparison-layer").value==="background"?"background":"combined";
  const figure=(art,label)=>`<figure><figcaption>${label}</figcaption><a href="${fullUrl(d,layer,art)}" target="_blank" rel="noopener"><img loading="lazy" width="420" height="420" src="${thumbUrl(d,layer,art)}" alt="${label} · Vampire ${d.id}"></a></figure>`;
  const state=comparisonChoice(d);
- const status=option?state.status:deliveryChanged(d)?"A newer version is now live":"Unchanged in the night delivery";
+ const status=option?state.status:unchanged?comparisonFlagStatus(d.id):"A newer version is now live";
  const choice=option&&!isArtist()?`<button class="primary" id="comparison-choice-${d.id}" data-background-choice="${state.choice}" ${choosingBackground.has(d.id)?"disabled":""}>${state.label}</button>`:"";
- const images=option?figure(option.previous,"Before")+figure(option.delivered,"After"):figure(d,"Current version");
- return `<article class="comparison-card" data-comparison-id="${d.id}"><h3>Vampire ${d.id}</h3><div class="comparison-images">${images}</div><div class="row comparison-actions"><span id="comparison-status-${d.id}" class="meta" role="status">${status}</span>${choice}<button data-review-details>Review details</button></div></article>`;
+ const flag=unchanged&&!isArtist()?`<button id="comparison-flag-${d.id}" data-flag-change aria-pressed="${flaggedForChange(d.id)}" ${flaggingComparison.has(d.id)?"disabled":""}>${comparisonFlagLabel(d.id)}</button>`:"";
+ const placeholder=unchanged?'<figure><figcaption>After</figcaption><div class="comparison-placeholder">Unchanged in the night delivery</div></figure>':"";
+ const images=option?figure(option.previous,"Before")+figure(option.delivered,"After"):figure(d,"Current version")+placeholder;
+ return `<article class="comparison-card" data-comparison-id="${d.id}"><h3>Vampire ${d.id}</h3><div class="comparison-images">${images}</div><div class="row comparison-actions"><span id="comparison-status-${d.id}" class="meta" role="status">${status}</span>${choice}${flag}<button data-review-details>Review details</button></div></article>`;
 }
 function paintComparisonChoice(d){
  const button=$("comparison-choice-"+d.id);
@@ -609,6 +639,7 @@ $("artnotes").onchange=openArtist;
 $("artmore").onclick=moreArtist;
 $("artrows").onclick=e=>{const row=e.target.closest(".fix");if(row)openDetail(row.dataset.id,AROWS.map(d=>d.id))};
 $("fixbtn").onclick=()=>{paintFixes();$("fixes").classList.add("open")};
+$("comparison-fixes").onclick=$("fixbtn").onclick;
 $("fixclose").onclick=()=>{$("fixes").classList.remove("open");fillFilters();render()};
 $("fixrows").onclick=async e=>{
  const row=e.target.closest(".fix");if(!row)return;const id=row.dataset.id;
@@ -629,6 +660,7 @@ $("grid").onclick=e=>{
   if(!card)return;
   const id=card.dataset.comparisonId;
   if(e.target.dataset.backgroundChoice)return chooseBackground(e.target.dataset.backgroundChoice,id);
+  if(Object.hasOwn(e.target.dataset,"flagChange"))return flagComparison(id);
   if(Object.hasOwn(e.target.dataset,"reviewDetails"))openDetail(id);
   return;
  }
