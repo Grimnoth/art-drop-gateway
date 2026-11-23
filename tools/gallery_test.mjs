@@ -6,12 +6,12 @@ import vm from "node:vm";
 const html = readFileSync(new URL("./gallery.html", import.meta.url), "utf8");
 const script = html.match(/<script(?: type="module")?>([\s\S]*?)<\/script>/)[1]
   .replace(/^import .*review-state.*;\s*$/m, "").replace(/\binit\(\);\s*$/, "");
-let reviewStatus, artVersion;
-try { ({ reviewStatus, artVersion } = await import("./review-state.mjs")); } catch (e) {
+let reviewState = {};
+try { reviewState = await import("./review-state.mjs"); } catch (e) {
   if (e.code !== "ERR_MODULE_NOT_FOUND") throw e;
 }
 
-function gallery({ failSave = false, data, settings = {}, search = "" } = {}) {
+function gallery({ failSave = false, data, settings = {}, search = "", backgroundResponse } = {}) {
   const nodes = new Map(), writes = [];
   let saved = JSON.stringify(settings);
   const node = (id) => {
@@ -23,13 +23,14 @@ function gallery({ failSave = false, data, settings = {}, search = "" } = {}) {
     }
     return nodes.get(id);
   };
-  const context = vm.createContext({ reviewStatus, artVersion, URLSearchParams, location: { search, hash: "" },
+  const context = vm.createContext({ ...reviewState, URLSearchParams, location: { search, hash: "" },
     document: { getElementById: node, querySelector: () => null, body: node("body") },
     localStorage: { getItem: () => saved, setItem: (_key, value) => { saved = value; } },
     matchMedia: () => ({ matches: false }), scrollTo() {}, setTimeout() {},
     fetch: async (path, options) => {
       if (path === "/data") return { json: async () => data };
-      writes.push({ path, body: JSON.parse(options.body) }); return { ok: !failSave, status: failSave ? 503 : 200 };
+      writes.push({ path, body: JSON.parse(options.body) });
+      return { ok: !failSave, status: failSave ? 503 : 200, json: async () => backgroundResponse };
     } });
   vm.runInContext(script, context);
   vm.runInContext(`ME="Ada"; items=[{id:"00001"},{id:"00002"},{id:"00003"}];
@@ -57,6 +58,39 @@ test("the delivery filter shows only the latest batch", async () => {
   g.node("filter").value = "delivery";
   g.run("compute()");
   assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002");
+});
+
+test("the vampire review includes unchanged art and can choose the matched prior artwork in detail", async () => {
+  const prefix = "r/0123456789abcdef/";
+  const previous = { v: { character: "", background: "", combined: "" }, tv: "" };
+  const delivered = { v: { character: "", background: prefix, combined: prefix }, tv: prefix };
+  const selection = { choice: "previous", seq: 1, at: 25, source: prefix };
+  const data = {
+    ...deliveryData, catalog_version: "base",
+    items: deliveryData.items.map((d, i) => i === 0 ? { ...d, ...delivered } : d),
+    background_options: { tag: "delivery-2026-11-21", ids: ["00001", "00002"],
+      items: { "00001": { previous, delivered } },
+      previousReviews: { "00001": { verdict: "ok" }, "00002": { verdict: "flag", note: "Daylight", reasons: [] } } },
+    background_selections: {},
+  };
+  const g = gallery({ data, search: "?backgrounds=all",
+    backgroundResponse: { catalog_version: "base", selection } });
+  await g.run("init()");
+  assert.equal(g.node("filter").value, "backgroundVampires");
+  assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002");
+  assert.match(g.node("filter").innerHTML, /Unchanged vampires \(1\)/);
+  assert.match(g.node("filter").innerHTML, /Changed vampires I marked OK \(1\)/);
+  g.run('openDetail("00002")');
+  assert.match(g.node("bmessage").textContent, /Unchanged/);
+  assert.match(g.node("dmeta").innerHTML, /Before this delivery.*Flagged.*Daylight/);
+  g.run('openDetail("00001")');
+  assert.equal(g.node("bprevious").src, "/full/00001/background.png");
+  assert.match(g.node("bdelivered").src, /0123456789abcdef.*00001__background/);
+  await g.run('chooseBackground("previous")');
+  assert.equal(g.node("dimg").src, "/full/00001/combined.png");
+  assert.deepEqual(g.writes.at(-1), { path: "/background", body: [
+    { id: "00001", choice: "previous", catalog_version: "base", background_version: 0 },
+  ] });
 });
 
 test("a delivery link opens exactly that batch without saved type or trait filters", async () => {
