@@ -80,17 +80,41 @@ test("the vampire review includes unchanged art and can choose the matched prior
   assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002");
   assert.match(g.node("filter").innerHTML, /Unchanged vampires \(1\)/);
   assert.match(g.node("filter").innerHTML, /Changed vampires I marked OK \(1\)/);
+  const cards = g.node("grid").innerHTML;
+  assert.match(cards, /Before.*00001_combined.webp.*After.*0123456789abcdef.*00001_combined.webp/);
+  assert.match(cards, /I prefer the previous version/);
+  assert.match(cards, /Unchanged in the night delivery/);
+  assert.equal(g.node("detail").classList.contains("open"), false);
+  const target = { dataset: { backgroundChoice: "previous" }, closest: () => ({ dataset: { comparisonId: "00001" } }) };
+  await g.node("grid").onclick({ target });
+  assert.equal(g.node("comparison-status-00001").textContent, "Showing previous version");
+  assert.equal(g.node("comparison-choice-00001").dataset.backgroundChoice, "delivered");
+  assert.equal(g.node("detail").classList.contains("open"), false);
+  assert.deepEqual(g.writes.at(-1), { path: "/background", body: [
+    { id: "00001", choice: "previous", catalog_version: "base", background_version: 0 },
+  ] });
   g.run('openDetail("00002")');
   assert.match(g.node("bmessage").textContent, /Unchanged/);
   assert.match(g.node("dmeta").innerHTML, /Before this delivery.*Flagged.*Daylight/);
   g.run('openDetail("00001")');
   assert.equal(g.node("bprevious").src, "/full/00001/background.png");
   assert.match(g.node("bdelivered").src, /0123456789abcdef.*00001__background/);
-  await g.run('chooseBackground("previous")');
   assert.equal(g.node("dimg").src, "/full/00001/combined.png");
-  assert.deepEqual(g.writes.at(-1), { path: "/background", body: [
-    { id: "00001", choice: "previous", catalog_version: "base", background_version: 0 },
-  ] });
+});
+
+test("the inline review paginates and keeps the general gallery queue independently", async () => {
+  const ids = Array.from({ length: 13 }, (_, i) => String(i + 1).padStart(5, "0"));
+  const data = { ...deliveryData, items: ids.map(id => ({ id })),
+    background_options: { ids, items: {}, tag: "night" } };
+  const g = gallery({ data, search: "?backgrounds=all", settings: { f: "all", page: 8 } });
+  await g.run("init()");
+  assert.match(g.node("pageinfo").textContent, /Page 1 of 2/);
+  assert.doesNotMatch(g.node("grid").innerHTML, /00013/);
+  g.node("next").onclick();
+  assert.match(g.node("pageinfo").textContent, /Page 2 of 2/);
+  assert.match(g.node("grid").innerHTML, /00013/);
+  assert.equal(g.node("next").disabled, true);
+  assert.equal(g.savedSettings().page, 8);
 });
 
 test("a delivery link opens exactly that batch without saved type or trait filters", async () => {

@@ -51,6 +51,19 @@ nav{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:cente
 .detailbar h2{margin:0;font-size:18px}
 #vampire-review{margin:0 0 16px;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:8px}
 #vampire-review h2{margin:0 0 8px;font-size:20px}
+#vampire-review .row+.row{margin-top:10px}
+body.comparison header,body.comparison #helpbox,body.comparison #good{display:none}
+body.comparison main{max-width:940px;margin:auto}
+body.comparison #grid{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
+.comparison-card{min-width:0;padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+.comparison-card h3{margin:0 0 10px;font-size:18px}
+.comparison-images{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.comparison-images figure{margin:0;min-width:0}
+.comparison-images figcaption{margin-bottom:6px}
+.comparison-images img{display:block;width:100%;height:auto;aspect-ratio:1;object-fit:contain;background:var(--bg);border-radius:6px}
+.comparison-actions{margin-top:12px;align-items:center}
+.comparison-actions [role=status]{margin-right:auto}
+@media(max-width:620px){.comparison-images{grid-template-columns:minmax(0,1fr)}.comparison-card{padding:10px}}
 #bcompare{grid-column:1/-1}
 #bcompare summary{cursor:pointer;padding:10px 0}
 #bcompare figure{margin:12px 0 20px;max-width:650px}
@@ -176,7 +189,7 @@ body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.
 <main>
  <section id="vampire-review" hidden><h2>Vampire review</h2>
   <div class="row" id="vampire-filters" aria-label="Vampire review filters"></div>
-  <div class="row"><button id="start-comparing" class="primary">Start reviewing</button><a href="/">Back to all art</a></div>
+  <div class="row"><label>Compare <select id="comparison-layer"><option value="combined">Full images</option><option value="background">Backgrounds only</option></select></label><a href="/">Back to all art</a></div>
  </section>
  <a id="vampire-review-link" href="/?backgrounds=all" hidden>Vampire review</a>
  <details id="helpbox"><summary>How to review</summary><p id="help"></p></details>
@@ -244,7 +257,9 @@ const backgroundFilters = { all: "backgroundVampires", changed: "backgroundChang
 const requestedBackgrounds = query.get("backgrounds");
 const backgroundQueue = Object.hasOwn(backgroundFilters, requestedBackgrounds) ? backgroundFilters[requestedBackgrounds] : "";
 const linkedQueue = linkedDelivery || backgroundQueue;
-let backgroundArchive = null, backgroundIds = new Set(), backgroundSelections = {}, backgroundLayer = "background", choosingBackground = false;
+const pageSize = backgroundQueue ? 12 : PAGE;
+let backgroundArchive = null, backgroundIds = new Set(), backgroundSelections = {}, backgroundLayer = "background";
+const choosingBackground = new Set();
 let deliveryTag = linkedDelivery;
 // The artist reads flags and does not review. The name comes from the login.
 // Display words come from the Worker's settings (wrangler.toml [vars]), so one page serves any project.
@@ -266,8 +281,8 @@ const selectedBackground = d => backgroundSelection(d, backgroundArchive, backgr
 const backgroundVersion = id => backgroundSelections[id]?.seq || 0;
 const visibleBackground = (d, kind) => kind !== "character" && selectedBackground(d)?.choice === "previous"
   ? backgroundOption(d, backgroundArchive).previous : d;
-const thumbUrl=(d,k)=>{
- const prefix=vp(visibleBackground(d,k).tv);
+const thumbUrl=(d,k,art=visibleBackground(d,k))=>{
+ const prefix=vp(art.tv);
  return prefix?`/o/${prefix}thumbs/${d.id}_${k}.webp`:`/thumbs/${d.id}_${k}.webp`;
 };
 const fullUrl=(d,k,art=visibleBackground(d,k))=>{
@@ -337,13 +352,39 @@ function compute(){
  if(s=="contrast")list.sort((a,b)=>a.contrast-b.contrast);
  if(s=="coverage")list.sort((a,b)=>a.coverage-b.coverage);
 }
-function pages(){return Math.max(1,Math.ceil(list.length/PAGE))}
-function pageItems(){return list.slice(page*PAGE,(page+1)*PAGE)}
+function pages(){return Math.max(1,Math.ceil(list.length/pageSize))}
+function pageItems(){return list.slice(page*pageSize,(page+1)*pageSize)}
 function tileClass(d){const v=mine(d.id)?.verdict,f=flaggers(d.id).length;return "tile"+($("view").value=="character"?" char":"")+(f?" flag":v=="ok"&&!stale(d.id)?" ok":"")}
 const flagText=id=>(needsReReview(id)?"Needs re-review: ":"FLAG: ")+flaggers(id).map(r=>r.by).join(", ");
-const tileTags=d=>backgroundQueue&&backgroundIds.has(d.id)
- ?(deliveryChanged(d)?"<b>Changed</b>":"<b>Unchanged</b>")
- :(needsReReview(d.id)?"<b>Re-review</b>":"")+(!HASCHOSEN?"":d.mint?`<b class="star" title="${esc(CFG.chosen)}">&#9733;</b>`:`<b class="cut" title="${esc(CFG.others)}">${esc(CFG.othersTag)}</b>`)+[UPD[d.id]?"U":"",d.prov?"P":"",d.cleanup?"C":"",(d.twins||[]).length?"T":""].filter(Boolean).map(t=>`<b>${t}</b>`).join("");
+const tileTags=d=>(needsReReview(d.id)?"<b>Re-review</b>":"")+(!HASCHOSEN?"":d.mint?`<b class="star" title="${esc(CFG.chosen)}">&#9733;</b>`:`<b class="cut" title="${esc(CFG.others)}">${esc(CFG.othersTag)}</b>`)+[UPD[d.id]?"U":"",d.prov?"P":"",d.cleanup?"C":"",(d.twins||[]).length?"T":""].filter(Boolean).map(t=>`<b>${t}</b>`).join("");
+function comparisonChoice(d){
+ const previous=selectedBackground(d)?.choice==="previous";
+ return {
+  status:previous?"Showing previous version":"Showing night version",
+  choice:previous?"delivered":"previous",
+  label:previous?"Use the night version":"I prefer the previous version",
+ };
+}
+function comparisonCard(d){
+ const option=backgroundOption(d,backgroundArchive);
+ const layer=$("comparison-layer").value==="background"?"background":"combined";
+ const figure=(art,label)=>`<figure><figcaption>${label}</figcaption><a href="${fullUrl(d,layer,art)}" target="_blank" rel="noopener"><img loading="lazy" width="420" height="420" src="${thumbUrl(d,layer,art)}" alt="${label} · Vampire ${d.id}"></a></figure>`;
+ const state=comparisonChoice(d);
+ const status=option?state.status:deliveryChanged(d)?"A newer version is now live":"Unchanged in the night delivery";
+ const choice=option&&!isArtist()?`<button class="primary" id="comparison-choice-${d.id}" data-background-choice="${state.choice}" ${choosingBackground.has(d.id)?"disabled":""}>${state.label}</button>`:"";
+ const images=option?figure(option.previous,"Before")+figure(option.delivered,"After"):figure(d,"Current version");
+ return `<article class="comparison-card" data-comparison-id="${d.id}"><h3>Vampire ${d.id}</h3><div class="comparison-images">${images}</div><div class="row comparison-actions"><span id="comparison-status-${d.id}" class="meta" role="status">${status}</span>${choice}<button data-review-details>Review details</button></div></article>`;
+}
+function paintComparisonChoice(d){
+ const button=$("comparison-choice-"+d.id);
+ if(!button)return;
+ const state=comparisonChoice(d);
+ const pending=choosingBackground.has(d.id);
+ button.disabled=pending;
+ button.dataset.backgroundChoice=state.choice;
+ button.textContent=pending?"Saving…":state.label;
+ $("comparison-status-"+d.id).textContent=state.status;
+}
 function render(){
  page=Math.min(page,pages()-1);cur=Math.min(cur,Math.max(0,pageItems().length-1));
  const view=$("view").value;
@@ -351,12 +392,12 @@ function render(){
   const labels={all:"All",changed:"Changed",unchanged:"Unchanged","previously-ok":"Previously OK"};
   $("vampire-filters").innerHTML=Object.entries(backgroundFilters).map(([key,filter])=>
    `<button data-filter="${filter}" aria-pressed="${$("filter").value===filter}">${labels[key]} (${items.filter(FILTERS[filter][1]).length})</button>`).join("");
-  $("start-comparing").disabled=!list.length;
  }
- $("grid").innerHTML=pageItems().map((d,i)=>{
+ $("grid").innerHTML=backgroundQueue?(pageItems().map(comparisonCard).join("")||'<p>No vampires in this filter.</p>'):pageItems().map((d,i)=>{
   return `<div class="${tileClass(d)}${i==cur?" cur":""}" data-flags="${esc(flagText(d.id))}" data-id="${d.id}" data-i="${i}"><img loading="lazy" src="${thumbUrl(d,view)}" alt="${esc(CFG.noun)} ${d.id}"><span class="id">${d.id}</span><span class="tags">${tileTags(d)}</span>${flagBtn(d.id)}</div>`}).join("");
  $("pageinfo").textContent=`Page ${page+1} of ${pages()} (${list.length} ${CFG.nouns})`;
  $("prev").disabled=page==0;
+ if(backgroundQueue)$("next").disabled=page>=pages()-1;
  stats();saveState();
 }
 const flagBtn=id=>{const on=mine(id)?.verdict=="flag";return `<button class="fl${on?" on":""}" title="${on?"Remove my flag":"Flag"}" aria-label="${on?"Remove my flag from":"Flag"} ${id}" aria-pressed="${on}">&#9873;</button>`};
@@ -401,7 +442,7 @@ async function pageGood(){
 function openDetail(id,seq=null){DSEQ=seq;
  const d=byId[id];dLayer="combined";const v=mine(id);dReasons=new Set(v?.reasons||[]);
  backgroundLayer="background";
- $("bcompare").open=Boolean(backgroundQueue && backgroundOption(d,backgroundArchive));
+ $("bcompare").open=false;
  $("note").value=v?.note||"";$("stage").classList.remove("zoom");
  $("dtitle").textContent=CFG.noun+" "+id;$("detail").dataset.id=id;$("detail").classList.add("open");$("detail").scrollTop=0;
  paintDetail();
@@ -423,7 +464,7 @@ function paintBackground(d){
   $(image+"-link").href=src;
   const button=$("bchoose-"+version);
   button.hidden=isArtist();
-  button.disabled=choosingBackground||choice===version;
+  button.disabled=choosingBackground.has(d.id)||choice===version;
   button.textContent=choice===version?"Using "+label+" background":"Use "+label+" background";
  }
 }
@@ -434,23 +475,25 @@ function previousReview(id){
  if(!verdict)return "";
  return `<p><b>Before this delivery:</b> ${esc([verdict,...(review.reasons||[]),review.note].filter(Boolean).join(" · "))}</p>`;
 }
-async function chooseBackground(choice){
- const id=$("detail").dataset.id,d=byId[id];
- if(choosingBackground||isArtist()||!backgroundOption(d,backgroundArchive)||(selectedBackground(d)?.choice||"delivered")===choice)return;
- choosingBackground=true;
- paintBackground(d);
+async function chooseBackground(choice,id=$("detail").dataset.id){
+ const d=byId[id];
+ if(choosingBackground.has(id)||isArtist()||!backgroundOption(d,backgroundArchive)||(selectedBackground(d)?.choice||"delivered")===choice)return;
+ choosingBackground.add(id);
+ paintComparisonChoice(d);
+ if($("detail").classList.contains("open")&&$("detail").dataset.id===id)paintBackground(d);
  try{
   const response=await fetch("/background",{method:"POST",body:JSON.stringify([{id,choice,catalog_version:CATALOG,background_version:backgroundVersion(id)}])});
   if(!response.ok)throw new Error(response.status===409?"The gallery changed. Reload before choosing.":"Could not save that background.");
   const saved=await response.json();
   CATALOG=saved.catalog_version;
   backgroundSelections[id]=saved.selection;
-  fillFilters();compute();render();
+  if(!backgroundQueue){fillFilters();compute();render()}
   toast(choice==="previous"?"Previous background selected.":"Night background selected.");
  }catch(e){toast(e.message)}
  finally{
-  choosingBackground=false;
-  if($("detail").classList.contains("open"))paintDetail();
+  choosingBackground.delete(id);
+  paintComparisonChoice(d);
+  if($("detail").classList.contains("open")&&$("detail").dataset.id===id)paintDetail();
  }
 }
 function paintDetail(){
@@ -475,7 +518,7 @@ function step(n){
  const id=$("detail").dataset.id;
  // Opened from the artist list: the arrows walk that list, not the grid.
  if(DSEQ){const nx=DSEQ[DSEQ.indexOf(id)+n];if(nx)openDetail(nx,DSEQ);return}
- const i=list.findIndex(d=>d.id==id),nx=list[i+n];if(!nx)return;page=Math.floor((i+n)/PAGE);cur=(i+n)%PAGE;render();openDetail(nx.id)}
+ const i=list.findIndex(d=>d.id==id),nx=list[i+n];if(!nx)return;page=Math.floor((i+n)/pageSize);cur=(i+n)%pageSize;render();openDetail(nx.id)}
 function close(){$("detail").classList.remove("open");$("dimg").src="";DSEQ=null}
 const ATABS={rereview:["Awaiting re-review",id=>needsReReview(id)],send:["Sent to you",id=>stOf(id)=="send"],open:["All open flags",id=>stOf(id)=="send"||stOf(id)==""],fixed:["Fixed",id=>stOf(id)=="fixed"]};
 function artistRows(tab){
@@ -509,6 +552,11 @@ async function init(){
  backgroundArchive=r.background_options||null;backgroundIds=new Set(backgroundArchive?.ids||[]);backgroundSelections=r.background_selections||{};
  $("vampire-review").hidden=!backgroundQueue;
  $("vampire-review-link").hidden=Boolean(backgroundQueue)||!backgroundIds.size;
+ document.body.classList.toggle("comparison",Boolean(backgroundQueue));
+ if(backgroundQueue){
+  $("prev").textContent="Previous page";
+  $("next").textContent="Next page";
+ }
  UPD={...r.updates};for(const d of items)if(d.upd)UPD[d.id]=d.upd;
  if (!linkedDelivery) {
   let latest = null;
@@ -576,12 +624,20 @@ $("tile").onchange=e=>{document.documentElement.style.setProperty("--tile",e.tar
 $("jump").onchange=e=>{const id=e.target.value.trim().padStart(5,"0");if(byId[id])openDetail(id);else toast(`No ${CFG.noun.toLowerCase()} `+e.target.value);e.target.value=""};
 $("prev").onclick=()=>goPage(page-1);$("next").onclick=()=>goPage(page+1);$("good").onclick=pageGood;
 $("grid").onclick=e=>{
+ if(backgroundQueue){
+  const card=e.target.closest("[data-comparison-id]");
+  if(!card)return;
+  const id=card.dataset.comparisonId;
+  if(e.target.dataset.backgroundChoice)return chooseBackground(e.target.dataset.backgroundChoice,id);
+  if(Object.hasOwn(e.target.dataset,"reviewDetails"))openDetail(id);
+  return;
+ }
  const t=e.target.closest(".tile");if(!t)return;
  if(!e.target.closest(".fl"))return openDetail(t.dataset.id);
  setV(t.dataset.id,mine(t.dataset.id)?.verdict=="flag"?"clear":"flag",[],"");
 };
 $("dclose").onclick=close;$("dprev").onclick=()=>step(-1);$("dnext").onclick=()=>step(1);
-$("start-comparing").onclick=()=>{const item=pageItems()[0];if(item)openDetail(item.id)};
+$("comparison-layer").onchange=render;
 $("vampire-filters").onclick=e=>{
  const filter=e.target.dataset.filter;
  if(Object.values(backgroundFilters).includes(filter)){$("filter").value=filter;compute();goPage(0)}
@@ -612,6 +668,7 @@ document.onkeydown=e=>{
  if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;
  const open=$("detail").classList.contains("open");
  if(open){if(e.key=="Escape")close();if(e.key=="ArrowRight")step(1);if(e.key=="ArrowLeft")step(-1);if(isArtist())return;if(e.key=="f")dSave("flag");if(e.key=="o")dSave("ok");return}
+ if(backgroundQueue)return;
  if(isArtist()&&e.key!="Enter"&&!e.key.startsWith("Arrow"))return;
  const n=pageItems().length,cols=getComputedStyle($("grid")).gridTemplateColumns.split(" ").length;
  const mv={ArrowRight:1,ArrowLeft:-1,ArrowDown:cols,ArrowUp:-cols}[e.key];

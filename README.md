@@ -22,8 +22,8 @@ gives the artist a clean list of the flags, and publishes each new release by it
 - **The update:** `tools/pull_update.py` compares the artist's latest release with the site by checksum,
   downloads only the ZIPs that changed, and publishes only the changed items.
 - **Vampire review:** when configured, `/?backgrounds=all` opens the whole vampire collection for a
-  single delivery. It shows which backgrounds changed, lets reviewers compare the two versions,
-  and records which one the gallery should display. The choice switches the background and matching
+  single delivery. Scroll through pages of before/after pairs, or filter to unchanged art.
+  Each changed item has a button to choose which version the gallery should display. The choice switches the background and matching
   composite together. If a later delivery replaces that artwork, its new art stays visible.
 
 The optional private R2 object `meta/background-options.json` supplies the delivery `tag`, all
