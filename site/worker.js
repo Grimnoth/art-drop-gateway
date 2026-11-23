@@ -3,7 +3,7 @@
 // ponytail: one shared password and self-declared names, because this tool is temporary.
 // To restrict by person, put Cloudflare Access in front and read its verified email.
 
-import { reviewStatus } from "../tools/review-state.mjs";
+import { backgroundOption, backgroundReviewUpdate, backgroundSelection, reviewStatus } from "../tools/review-state.mjs";
 
 const THUMB = /^\/thumbs\/(\d{5})_(character|background|combined)\.webp$/;
 const FULL = /^\/full\/(\d{5})\/(character|background|combined)\.png$/;
@@ -50,6 +50,23 @@ const VERDICTS_SQL = `SELECT id, json_group_object(by_name, json_object('id', id
 const TRIAGE_SQL = `SELECT COALESCE(json_group_object(id, json_object('id', id, 'status', status, 'by', by_name, 'at', at)), '{}') AS j FROM triage`;
 
 const UPDATES_SQL = `SELECT COALESCE(json_group_object(id, json_object('tag', tag, 'kinds', json(kinds), 'at', at)), '{}') AS j FROM updates`;
+const SELECTION_REVISION = "COALESCE((SELECT MAX(seq) FROM background_selections), 0)";
+const SELECTIONS_SQL = "SELECT seq, id, choice, source, at FROM background_selections WHERE seq IN (SELECT MAX(seq) FROM background_selections GROUP BY id)";
+const selectionVersion = (catalog, revision) => `${catalog.httpEtag}/${revision}`;
+
+async function backgroundOptions(env) {
+  const obj = await env.ART.get("meta/background-options.json");
+  return obj ? obj.json() : null;
+}
+
+function reviewerBackgroundOptions(archive, name) {
+  if (!archive) return null;
+  const { ids, items, tag, previousReviews } = archive;
+  const reviews = previousReviews && Object.hasOwn(previousReviews, name) ? previousReviews[name] : {};
+  return { ids, items, tag, previousReviews: reviews };
+}
+
+const findItem = (state, id) => (Array.isArray(state) ? state : state.items).find((item) => item.id === id);
 
 // Display words from wrangler.toml [vars]. The gallery has a default for each.
 const config = (env) => Object.fromEntries(
@@ -61,12 +78,31 @@ async function data(env, name) {
   // In R2, not in the Worker's assets, so that a delivery update needs no redeploy.
   const obj = await env.ART.get("meta/items.json");
   if (!obj) throw new Error("meta/items.json is missing");
-  const items = await obj.text();
-  const [v, t, u] = await env.DB.batch([env.DB.prepare(VERDICTS_SQL), env.DB.prepare(TRIAGE_SQL), env.DB.prepare(UPDATES_SQL)]);
+  const [items, backgrounds, [v, t, u, selections]] = await Promise.all([
+    obj.text(), backgroundOptions(env),
+    env.DB.batch([VERDICTS_SQL, TRIAGE_SQL, UPDATES_SQL, SELECTIONS_SQL].map((sql) => env.DB.prepare(sql))),
+  ]);
+  const selected = Object.fromEntries(selections.results.map((row) => [row.id, row]));
+  const seq = Math.max(0, ...selections.results.map((row) => row.seq));
   // A collection can exceed D1's single-value limit; each item's reviewers remain one bounded value.
   const verdicts = v.results.map((r) => `${JSON.stringify(r.id)}:${r.people}`).join(",");
   // Joined as text so that the Worker does not parse 5 MB of JSON on each load.
-  return json(`{"me":${JSON.stringify(name)},"catalog_version":${JSON.stringify(obj.httpEtag)},"config":${JSON.stringify(config(env))},"items":${items},"verdicts":{${verdicts}},"triage":${t.results[0].j},"updates":${u.results[0].j}}`);
+  return json(`{"me":${JSON.stringify(name)},"catalog_version":${JSON.stringify(selectionVersion(obj, seq))},"config":${JSON.stringify(config(env))},"items":${items},"verdicts":{${verdicts}},"triage":${t.results[0].j},"updates":${u.results[0].j},"background_options":${JSON.stringify(reviewerBackgroundOptions(backgrounds, name))},"background_selections":${JSON.stringify(selected)}}`);
+}
+
+async function selectBackground(env, name, batch, catalog, seq, at) {
+  if (name.toLowerCase() === (env.ARTIST_NAME || "Artist").toLowerCase()) return text("Reviewer access required.", 403);
+  const { id, choice } = batch[0] ?? {};
+  if (batch.length !== 1 || typeof id !== "string" || !ID.test(id) || !["previous", "delivered"].includes(choice)) return text("Invalid background choice.", 400);
+  const [archive, state] = await Promise.all([backgroundOptions(env), catalog.json()]);
+  const option = backgroundOption(findItem(state, id), archive);
+  if (!option) return text("No matched background versions for this item.", 404);
+  const source = option.delivered.v.combined;
+  const selection = await env.DB.prepare(`INSERT INTO background_selections (id, choice, source, by_name, at)
+    SELECT ?1, ?2, ?3, ?4, ?5 WHERE ${SELECTION_REVISION}=?6 RETURNING id, choice, source, at, seq`)
+    .bind(id, choice, source, name, at, seq).first();
+  if (!selection) return text("The gallery changed. Reload before choosing.", 409);
+  return json(JSON.stringify({ selection, catalog_version: selectionVersion(catalog, selection.seq) }));
 }
 
 async function save(req, env, path, name) {
@@ -78,24 +114,31 @@ async function save(req, env, path, name) {
   } catch (e) {
     return json(JSON.stringify({ error: e.message }), 400);
   }
-  const catalog = await env.ART.head("meta/items.json");
+  const [catalog, seq] = await Promise.all([
+    path === "/background" ? env.ART.get("meta/items.json") : env.ART.head("meta/items.json"),
+    env.DB.prepare(`SELECT ${SELECTION_REVISION} AS seq`).first("seq"),
+  ]);
   if (!catalog) return text("Art catalog unavailable.", 503);
-  if (batch.some((r) => r?.catalog_version !== catalog.httpEtag)) return json('{"error":"Art changed. Reload the gallery before saving."}', 409);
+  if (batch.some((r) => r?.catalog_version !== selectionVersion(catalog, seq))) return json('{"error":"Art changed. Reload the gallery before saving."}', 409);
   const at = Math.floor(Date.now() / 1000);
+  if (path === "/background") return selectBackground(env, name, batch, catalog, seq, at);
   const stmts = [];
   for (const r of batch) {
     if (!ID.test(r?.id ?? "")) return json('{"error":"bad id"}', 400);
     if (path === "/triage") {
       if (!["send", "keep", "fixed", ""].includes(r.status)) return json('{"error":"bad status"}', 400);
-      stmts.push(env.DB.prepare("INSERT INTO triage (id, status, by_name, at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET status=?2, by_name=?3, at=?4").bind(r.id, r.status, name, at));
+      stmts.push(env.DB.prepare(`INSERT INTO triage (id, status, by_name, at)
+        SELECT ?1, ?2, ?3, ?4 WHERE ${SELECTION_REVISION}=?5 ON CONFLICT(id) DO UPDATE SET status=?2, by_name=?3, at=?4`).bind(r.id, r.status, name, at, seq));
     } else {
       if (!["ok", "flag", "clear"].includes(r.verdict)) return json('{"error":"bad verdict"}', 400);
       if (r.art_version !== undefined && (typeof r.art_version !== "string" || !/^(?:[A-Za-z0-9][A-Za-z0-9._-]{0,80}:\d{1,16})?$/.test(r.art_version))) return json('{"error":"bad art version"}', 400);
       const reasons = JSON.stringify((Array.isArray(r.reasons) ? r.reasons : []).map((x) => String(x).slice(0, 60)));
-      stmts.push(env.DB.prepare("INSERT INTO reviews (id, by_name, verdict, reasons, note, at, art_version) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT(id, by_name) DO UPDATE SET verdict=?3, reasons=?4, note=?5, at=?6, art_version=?7").bind(r.id, name, r.verdict, reasons, String(r.note ?? "").slice(0, 500), at, r.art_version ?? ""));
+      stmts.push(env.DB.prepare(`INSERT INTO reviews (id, by_name, verdict, reasons, note, at, art_version)
+        SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE ${SELECTION_REVISION}=?8
+        ON CONFLICT(id, by_name) DO UPDATE SET verdict=?3, reasons=?4, note=?5, at=?6, art_version=?7`).bind(r.id, name, r.verdict, reasons, String(r.note ?? "").slice(0, 500), at, r.art_version ?? "", seq));
     }
   }
-  if (stmts.length) await env.DB.batch(stmts);
+  if (stmts.length && (await env.DB.batch(stmts)).some((result) => result.meta.changes === 0)) return text("The gallery changed. Reload before saving.", 409);
   return json('{"ok":true}');
 }
 
@@ -106,8 +149,12 @@ const cell = (s) => q(/^[\s=+\-@]/.test(s) ? `'${s}` : s);
 
 async function exportCsv(env, artistOnly) {
   // Each item's last update is in meta/items.json. The D1 table holds updates from before that.
-  const state = JSON.parse((await (await env.ART.get("meta/items.json"))?.text()) ?? "[]");
-  const updatedIn = new Map((Array.isArray(state) ? state : state.items).filter((d) => d.upd).map((d) => [d.id, d.upd]));
+  const [state, archive, selections] = await Promise.all([
+    env.ART.get("meta/items.json").then((obj) => obj ? obj.json() : []),
+    backgroundOptions(env), env.DB.prepare(SELECTIONS_SQL).all(),
+  ]);
+  const items = new Map((Array.isArray(state) ? state : state.items).map((item) => [item.id, item]));
+  const selected = Object.fromEntries(selections.results.map((row) => [row.id, row]));
   const { results } = await env.DB.prepare(
     "SELECT r.id, r.by_name, r.verdict, r.at, r.art_version, r.reasons, r.note, COALESCE(t.status, '') AS status, t.at AS triage_at, COALESCE(u.tag, '') AS updated, u.at AS update_at FROM reviews r LEFT JOIN triage t ON t.id = r.id LEFT JOIN updates u ON u.id = r.id WHERE r.verdict = 'flag' ORDER BY r.id",
   ).all();
@@ -118,8 +165,10 @@ async function exportCsv(env, artistOnly) {
   }
   const rows = ["ID,file,what to fix,notes,flagged by,status,last updated in"];
   for (const [id, flags] of byId) {
-    const update = updatedIn.get(id) ?? (flags[0].updated ? { tag: flags[0].updated, at: flags[0].update_at } : undefined);
-    const status = reviewStatus(flags, update, { status: flags[0].status, at: flags[0].triage_at });
+    const item = items.get(id);
+    const update = item?.upd ?? (flags[0].updated ? { tag: flags[0].updated, at: flags[0].update_at } : undefined);
+    const selectedUpdate = backgroundReviewUpdate(backgroundSelection(item, archive, selected), update);
+    const status = reviewStatus(flags, selectedUpdate, { status: flags[0].status, at: flags[0].triage_at });
     if (artistOnly && status !== "send") continue;
     const reasons = [...new Set(flags.flatMap((f) => JSON.parse(f.reasons)))].sort().join("; ");
     const notes = flags.filter((f) => f.note).map((f) => `${f.by_name}: ${f.note}`).join(" | ");
@@ -142,7 +191,7 @@ export default {
       if (!name) return text("Enter your name and the review password.", 401, { "WWW-Authenticate": `Basic realm="${String(env.SITE_TITLE || "Art review").replace(/[\x00-\x1f\x7f"\\]/g, "")}", charset="UTF-8"` });
 
       const path = url.pathname;
-      if (req.method === "POST" && (path === "/verdict" || path === "/triage")) return await save(req, env, path, name);
+      if (req.method === "POST" && ["/verdict", "/triage", "/background"].includes(path)) return await save(req, env, path, name);
       if (req.method !== "GET") return text("not found", 404);
       if (path === "/") {
         const page = await env.ASSETS.fetch(new URL("/gallery.html", url));

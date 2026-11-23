@@ -21,6 +21,18 @@ gives the artist a clean list of the flags, and publishes each new release by it
   reload before changing any reviews or fix-list decisions.
 - **The update:** `tools/pull_update.py` compares the artist's latest release with the site by checksum,
   downloads only the ZIPs that changed, and publishes only the changed items.
+- **Vampire review:** when configured, `/?backgrounds=all` opens the whole vampire collection for a
+  single delivery. It shows which backgrounds changed, lets reviewers compare the two versions,
+  and records which one the gallery should display. The choice switches the background and matching
+  composite together. If a later delivery replaces that artwork, its new art stays visible.
+
+The optional private R2 object `meta/background-options.json` supplies the delivery `tag`, all
+vampire `ids`, and `items` keyed by the changed IDs. Each item has `previous` and `delivered`
+references with the same `v` and `tv` fields as the catalog. Both entries must reference the same
+character. Empty layer and thumbnail prefixes refer to the original files. Optional
+`previousReviews` maps reviewer names to their captured reviews by ID. The page shows the record
+associated with the supplied login name. Background choices are stored as events in D1. They do
+not replace artist assets or review records.
 
 ## How an update stays safe
 

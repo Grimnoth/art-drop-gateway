@@ -186,6 +186,49 @@ try {
     assert.equal(Object.values(data.verdicts).filter(v=>v.LoadFixture).length,4000);
     assert.equal(data.verdicts["04000"].LoadFixture.note.length,500);
   });
+  await test("reviewers can choose either matched background and stale tabs cannot overwrite that choice", async () => {
+    const catalog = JSON.parse(readFileSync(items, "utf8"));
+    const oldArt = { v: { character: "", background: "", combined: "" }, tv: "" };
+    const newArt = { v: { character: "", background: V + "/", combined: V + "/" }, tv: V + "/" };
+    Object.assign(catalog[0], newArt, { upd: { tag: "night", at: 2 } });
+    writeFileSync(items, JSON.stringify(catalog));
+    wr("r2", "object", "put", "art-drop-gateway/meta/items.json", "--local", "--file", items);
+    const options = join(state, "background-options.json");
+    writeFileSync(options, JSON.stringify({
+      tag: "night", ids: ["00001", "00002"],
+      items: { "00001": { previous: oldArt, delivered: newArt } },
+      previousReviews: { Ada: { "00002": { verdict: "flag", note: "Daylight", reasons: [] } } },
+    }));
+    wr("r2", "object", "put", "art-drop-gateway/meta/background-options.json", "--local", "--file", options);
+    const read = async () => (await get("/data", ada)).json();
+    const start = await read();
+    catalogVersion = start.catalog_version;
+    assert.deepEqual(start.background_options.ids, ["00001", "00002"]);
+    assert.equal(start.background_options.previousReviews["00002"].note, "Daylight");
+    assert.deepEqual((await (await get("/data", max)).json()).background_options.previousReviews, {});
+    const select = (id, choice, auth = ada, origin = BASE) => post("/background", auth, [{ id, choice }], origin);
+    assert.equal((await select("00001", "previous", undefined, "https://example.invalid")).status, 403);
+    assert.equal((await select("00001", "previous", basic("Artist", PW))).status, 403);
+    assert.equal((await select("00002", "previous")).status, 404);
+    const chosen = await select("00001", "previous");
+    assert.equal(chosen.status, 200);
+    const first = await chosen.json();
+    assert.equal(first.selection.choice, "previous");
+    assert.equal((await read()).background_selections["00001"].choice, "previous");
+    assert.equal((await select("00001", "delivered")).status, 409);
+    assert.equal((await post("/verdict", ada, [{ id: "00001", verdict: "ok" }])).status, 409);
+    catalogVersion = first.catalog_version;
+    assert.equal((await select("00001", "delivered")).status, 200);
+    const end = await read();
+    assert.equal(end.background_selections["00001"].choice, "delivered");
+    assert.deepEqual(end.verdicts, start.verdicts);
+    catalogVersion = end.catalog_version;
+    catalog[0].v.character = V + "/";
+    writeFileSync(items, JSON.stringify(catalog));
+    wr("r2", "object", "put", "art-drop-gateway/meta/items.json", "--local", "--file", items);
+    catalogVersion = (await read()).catalog_version;
+    assert.equal((await select("00001", "previous")).status, 404);
+  });
 } finally {
   dev.kill("SIGTERM"); rmSync(".dev.vars", { force: true }); rmSync(state, { recursive: true, force: true });
 }
