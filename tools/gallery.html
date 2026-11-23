@@ -263,6 +263,7 @@ let DSEQ=null,ATAB="",ASHOW=0,AROWS=[];const ASTEP=60;
 // A prefix is used only in the exact shape pull_update.py writes, because URLs go into markup unescaped.
 const VPREFIX=/^r\/[0-9a-f]{16}\/$/,vp=p=>typeof p=="string"&&VPREFIX.test(p)?p:"";
 const selectedBackground = d => backgroundSelection(d, backgroundArchive, backgroundSelections);
+const backgroundVersion = id => backgroundSelections[id]?.seq || 0;
 const visibleBackground = (d, kind) => kind !== "character" && selectedBackground(d)?.choice === "previous"
   ? backgroundOption(d, backgroundArchive).previous : d;
 const thumbUrl=(d,k)=>{
@@ -318,7 +319,7 @@ function saveState(){
  } catch {}
 }
 async function post(batch,path="/verdict"){
- try{const r=await fetch(path,{method:"POST",body:JSON.stringify(batch.map(b=>({...b,by:ME,catalog_version:CATALOG})))});if(!r.ok)throw new Error(r.status==409?"The art changed. Reload the gallery before saving":r.status);}
+ try{const r=await fetch(path,{method:"POST",body:JSON.stringify(batch.map(b=>({...b,by:ME,catalog_version:CATALOG,background_version:backgroundVersion(b.id)})))});if(!r.ok)throw new Error(r.status==409?"The art changed. Reload the gallery before saving":r.status);}
  catch(e){toast("Not saved: "+e.message+". Check the server.");throw e}
 }
 function toast(t){$("toast").textContent=t;$("toast").style.display="block";setTimeout(()=>$("toast").style.display="none",5000)}
@@ -439,7 +440,7 @@ async function chooseBackground(choice){
  choosingBackground=true;
  paintBackground(d);
  try{
-  const response=await fetch("/background",{method:"POST",body:JSON.stringify([{id,choice,catalog_version:CATALOG}])});
+  const response=await fetch("/background",{method:"POST",body:JSON.stringify([{id,choice,catalog_version:CATALOG,background_version:backgroundVersion(id)}])});
   if(!response.ok)throw new Error(response.status===409?"The gallery changed. Reload before choosing.":"Could not save that background.");
   const saved=await response.json();
   CATALOG=saved.catalog_version;

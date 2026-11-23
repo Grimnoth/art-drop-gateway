@@ -50,9 +50,12 @@ const VERDICTS_SQL = `SELECT id, json_group_object(by_name, json_object('id', id
 const TRIAGE_SQL = `SELECT COALESCE(json_group_object(id, json_object('id', id, 'status', status, 'by', by_name, 'at', at)), '{}') AS j FROM triage`;
 
 const UPDATES_SQL = `SELECT COALESCE(json_group_object(id, json_object('tag', tag, 'kinds', json(kinds), 'at', at)), '{}') AS j FROM updates`;
-const SELECTION_REVISION = "COALESCE((SELECT MAX(seq) FROM background_selections), 0)";
 const SELECTIONS_SQL = "SELECT seq, id, choice, source, at FROM background_selections WHERE seq IN (SELECT MAX(seq) FROM background_selections GROUP BY id)";
-const selectionVersion = (catalog, revision) => `${catalog.httpEtag}/${revision}`;
+const selectionRevision = (id) => `COALESCE((SELECT MAX(seq) FROM background_selections WHERE id=${id}), 0)`;
+const versionsMatch = (param) => `NOT EXISTS (
+  SELECT 1 FROM json_each(${param}) AS viewed
+  WHERE ${selectionRevision("json_extract(viewed.value, '$[0]')")} <> json_extract(viewed.value, '$[1]')
+)`;
 
 async function backgroundOptions(env) {
   const obj = await env.ART.get("meta/background-options.json");
@@ -83,26 +86,25 @@ async function data(env, name) {
     env.DB.batch([VERDICTS_SQL, TRIAGE_SQL, UPDATES_SQL, SELECTIONS_SQL].map((sql) => env.DB.prepare(sql))),
   ]);
   const selected = Object.fromEntries(selections.results.map((row) => [row.id, row]));
-  const seq = Math.max(0, ...selections.results.map((row) => row.seq));
   // A collection can exceed D1's single-value limit; each item's reviewers remain one bounded value.
   const verdicts = v.results.map((r) => `${JSON.stringify(r.id)}:${r.people}`).join(",");
   // Joined as text so that the Worker does not parse 5 MB of JSON on each load.
-  return json(`{"me":${JSON.stringify(name)},"catalog_version":${JSON.stringify(selectionVersion(obj, seq))},"config":${JSON.stringify(config(env))},"items":${items},"verdicts":{${verdicts}},"triage":${t.results[0].j},"updates":${u.results[0].j},"background_options":${JSON.stringify(reviewerBackgroundOptions(backgrounds, name))},"background_selections":${JSON.stringify(selected)}}`);
+  return json(`{"me":${JSON.stringify(name)},"catalog_version":${JSON.stringify(obj.httpEtag)},"config":${JSON.stringify(config(env))},"items":${items},"verdicts":{${verdicts}},"triage":${t.results[0].j},"updates":${u.results[0].j},"background_options":${JSON.stringify(reviewerBackgroundOptions(backgrounds, name))},"background_selections":${JSON.stringify(selected)}}`);
 }
 
-async function selectBackground(env, name, batch, catalog, seq, at) {
+async function selectBackground(env, name, batch, catalog, at) {
   if (name.toLowerCase() === (env.ARTIST_NAME || "Artist").toLowerCase()) return text("Reviewer access required.", 403);
-  const { id, choice } = batch[0] ?? {};
+  const { id, choice, background_version = 0 } = batch[0] ?? {};
   if (batch.length !== 1 || typeof id !== "string" || !ID.test(id) || !["previous", "delivered"].includes(choice)) return text("Invalid background choice.", 400);
   const [archive, state] = await Promise.all([backgroundOptions(env), catalog.json()]);
   const option = backgroundOption(findItem(state, id), archive);
   if (!option) return text("No matched background versions for this item.", 404);
   const source = option.delivered.v.combined;
   const selection = await env.DB.prepare(`INSERT INTO background_selections (id, choice, source, by_name, at)
-    SELECT ?1, ?2, ?3, ?4, ?5 WHERE ${SELECTION_REVISION}=?6 RETURNING id, choice, source, at, seq`)
-    .bind(id, choice, source, name, at, seq).first();
+    SELECT ?1, ?2, ?3, ?4, ?5 WHERE ${selectionRevision("?1")}=?6 RETURNING id, choice, source, at, seq`)
+    .bind(id, choice, source, name, at, background_version).first();
   if (!selection) return text("The gallery changed. Reload before choosing.", 409);
-  return json(JSON.stringify({ selection, catalog_version: selectionVersion(catalog, selection.seq) }));
+  return json(JSON.stringify({ selection, catalog_version: catalog.httpEtag }));
 }
 
 async function save(req, env, path, name) {
@@ -114,28 +116,30 @@ async function save(req, env, path, name) {
   } catch (e) {
     return json(JSON.stringify({ error: e.message }), 400);
   }
-  const [catalog, seq] = await Promise.all([
-    path === "/background" ? env.ART.get("meta/items.json") : env.ART.head("meta/items.json"),
-    env.DB.prepare(`SELECT ${SELECTION_REVISION} AS seq`).first("seq"),
-  ]);
+  const catalog = await (path === "/background" ? env.ART.get("meta/items.json") : env.ART.head("meta/items.json"));
   if (!catalog) return text("Art catalog unavailable.", 503);
-  if (batch.some((r) => r?.catalog_version !== selectionVersion(catalog, seq))) return json('{"error":"Art changed. Reload the gallery before saving."}', 409);
+  if (batch.some((r) => r?.catalog_version !== catalog.httpEtag)) return json('{"error":"Art changed. Reload the gallery before saving."}', 409);
+  if (batch.some((r) => r.background_version !== undefined && (!Number.isSafeInteger(r.background_version) || r.background_version < 0))) {
+    return json('{"error":"bad background version"}', 400);
+  }
   const at = Math.floor(Date.now() / 1000);
-  if (path === "/background") return selectBackground(env, name, batch, catalog, seq, at);
+  if (path === "/background") return selectBackground(env, name, batch, catalog, at);
+  // All statements in the transaction check the same set of item revisions. A stale item cannot partially save a page.
+  const viewed = JSON.stringify(batch.map((r) => [r.id, r.background_version ?? 0]));
   const stmts = [];
   for (const r of batch) {
     if (!ID.test(r?.id ?? "")) return json('{"error":"bad id"}', 400);
     if (path === "/triage") {
       if (!["send", "keep", "fixed", ""].includes(r.status)) return json('{"error":"bad status"}', 400);
       stmts.push(env.DB.prepare(`INSERT INTO triage (id, status, by_name, at)
-        SELECT ?1, ?2, ?3, ?4 WHERE ${SELECTION_REVISION}=?5 ON CONFLICT(id) DO UPDATE SET status=?2, by_name=?3, at=?4`).bind(r.id, r.status, name, at, seq));
+        SELECT ?1, ?2, ?3, ?4 WHERE ${versionsMatch("?5")} ON CONFLICT(id) DO UPDATE SET status=?2, by_name=?3, at=?4`).bind(r.id, r.status, name, at, viewed));
     } else {
       if (!["ok", "flag", "clear"].includes(r.verdict)) return json('{"error":"bad verdict"}', 400);
       if (r.art_version !== undefined && (typeof r.art_version !== "string" || !/^(?:[A-Za-z0-9][A-Za-z0-9._-]{0,80}:\d{1,16})?$/.test(r.art_version))) return json('{"error":"bad art version"}', 400);
       const reasons = JSON.stringify((Array.isArray(r.reasons) ? r.reasons : []).map((x) => String(x).slice(0, 60)));
       stmts.push(env.DB.prepare(`INSERT INTO reviews (id, by_name, verdict, reasons, note, at, art_version)
-        SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE ${SELECTION_REVISION}=?8
-        ON CONFLICT(id, by_name) DO UPDATE SET verdict=?3, reasons=?4, note=?5, at=?6, art_version=?7`).bind(r.id, name, r.verdict, reasons, String(r.note ?? "").slice(0, 500), at, r.art_version ?? "", seq));
+        SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE ${versionsMatch("?8")}
+        ON CONFLICT(id, by_name) DO UPDATE SET verdict=?3, reasons=?4, note=?5, at=?6, art_version=?7`).bind(r.id, name, r.verdict, reasons, String(r.note ?? "").slice(0, 500), at, r.art_version ?? "", viewed));
     }
   }
   if (stmts.length && (await env.DB.batch(stmts)).some((result) => result.meta.changes === 0)) return text("The gallery changed. Reload before saving.", 409);

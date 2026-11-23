@@ -66,7 +66,7 @@ test("the vampire review includes unchanged art and can choose the matched prior
   const delivered = { v: { character: "", background: prefix, combined: prefix }, tv: prefix };
   const selection = { choice: "previous", seq: 1, at: 25, source: prefix };
   const data = {
-    ...deliveryData, catalog_version: "base/0",
+    ...deliveryData, catalog_version: "base",
     items: deliveryData.items.map((d, i) => i === 0 ? { ...d, ...delivered } : d),
     background_options: { tag: "delivery-2026-11-21", ids: ["00001", "00002"],
       items: { "00001": { previous, delivered } },
@@ -74,7 +74,7 @@ test("the vampire review includes unchanged art and can choose the matched prior
     background_selections: {},
   };
   const g = gallery({ data, search: "?backgrounds=all",
-    backgroundResponse: { catalog_version: "base/1", selection } });
+    backgroundResponse: { catalog_version: "base", selection } });
   await g.run("init()");
   assert.equal(g.node("filter").value, "backgroundVampires");
   assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002");
@@ -89,7 +89,7 @@ test("the vampire review includes unchanged art and can choose the matched prior
   await g.run('chooseBackground("previous")');
   assert.equal(g.node("dimg").src, "/full/00001/combined.png");
   assert.deepEqual(g.writes.at(-1), { path: "/background", body: [
-    { id: "00001", choice: "previous", catalog_version: "base/0" },
+    { id: "00001", choice: "previous", catalog_version: "base", background_version: 0 },
   ] });
 });
 

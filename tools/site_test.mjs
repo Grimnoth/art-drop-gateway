@@ -15,7 +15,8 @@ const BASE = "http://127.0.0.1:8799";
 const PW = "test-password:with-colon";
 let catalogVersion = "";
 const basic = (name, pw) => `Basic ${Buffer.from(`${name}:${pw}`).toString("base64")}`;
-const get = (path, auth, init = {}) => fetch(BASE + path, { redirect: "manual", signal: AbortSignal.timeout(15000), ...init, headers: { ...(auth ? { Authorization: auth } : {}), ...init.headers } });
+// Wrangler fixture commands can hold the test process long enough to expire an idle connection.
+const get = (path, auth, init = {}) => fetch(BASE + path, { redirect: "manual", signal: AbortSignal.timeout(15000), ...init, headers: { Connection: "close", ...(auth ? { Authorization: auth } : {}), ...init.headers } });
 const post = (path, auth, body, origin = BASE) => get(path, auth, { method: "POST", body: JSON.stringify(body.map(r=>({...r,catalog_version:catalogVersion}))), headers: { Origin: origin } });
 
 const state = mkdtempSync(join(tmpdir(), "gateway-site-test-"));
@@ -206,7 +207,8 @@ try {
     assert.deepEqual(start.background_options.ids, ["00001", "00002"]);
     assert.equal(start.background_options.previousReviews["00002"].note, "Daylight");
     assert.deepEqual((await (await get("/data", max)).json()).background_options.previousReviews, {});
-    const select = (id, choice, auth = ada, origin = BASE) => post("/background", auth, [{ id, choice }], origin);
+    const select = (id, choice, auth = ada, origin = BASE, background_version = 0) =>
+      post("/background", auth, [{ id, choice, background_version }], origin);
     assert.equal((await select("00001", "previous", undefined, "https://example.invalid")).status, 403);
     assert.equal((await select("00001", "previous", basic("Artist", PW))).status, 403);
     assert.equal((await select("00002", "previous")).status, 404);
@@ -215,19 +217,22 @@ try {
     const first = await chosen.json();
     assert.equal(first.selection.choice, "previous");
     assert.equal((await read()).background_selections["00001"].choice, "previous");
+    assert.equal((await post("/verdict", ada, [{ id: "00002", verdict: "ok" }])).status, 200);
     assert.equal((await select("00001", "delivered")).status, 409);
     assert.equal((await post("/verdict", ada, [{ id: "00001", verdict: "ok" }])).status, 409);
-    catalogVersion = first.catalog_version;
-    assert.equal((await select("00001", "delivered")).status, 200);
+    assert.equal((await post("/verdict", ada, [{ id: "00003", verdict: "ok" }, { id: "00001", verdict: "ok" }])).status, 409);
+    assert.deepEqual((await read()).verdicts["00003"], start.verdicts["00003"]);
+    assert.equal(first.catalog_version, catalogVersion);
+    assert.equal((await select("00001", "delivered", ada, BASE, first.selection.seq)).status, 200);
     const end = await read();
     assert.equal(end.background_selections["00001"].choice, "delivered");
-    assert.deepEqual(end.verdicts, start.verdicts);
+    assert.deepEqual(end.verdicts["00001"], start.verdicts["00001"]);
     catalogVersion = end.catalog_version;
     catalog[0].v.character = V + "/";
     writeFileSync(items, JSON.stringify(catalog));
     wr("r2", "object", "put", "art-drop-gateway/meta/items.json", "--local", "--file", items);
     catalogVersion = (await read()).catalog_version;
-    assert.equal((await select("00001", "previous")).status, 404);
+    assert.equal((await select("00001", "previous", ada, BASE, end.background_selections["00001"].seq)).status, 404);
   });
 } finally {
   dev.kill("SIGTERM"); rmSync(".dev.vars", { force: true }); rmSync(state, { recursive: true, force: true });
