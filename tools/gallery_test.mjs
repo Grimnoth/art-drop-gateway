@@ -18,6 +18,7 @@ function gallery({ failSave = false, data, settings = {}, search = "", backgroun
     if (!nodes.has(id)) {
       const classes = new Set();
       nodes.set(id, { value: id === "filter" ? "all" : "", style: {}, dataset: {},
+        setAttribute(name, value) { this[name] = value; },
         classList: { add: (...s) => s.forEach((x) => classes.add(x)), remove: (s) => classes.delete(s), contains: (s) => classes.has(s),
           toggle: (s, force) => force ? classes.add(s) : classes.delete(s) } });
     }
@@ -84,6 +85,11 @@ test("the vampire review includes unchanged art and can choose the matched prior
   assert.match(cards, /Before.*00001_combined.webp.*After.*0123456789abcdef.*00001_combined.webp/);
   assert.match(cards, /I prefer the previous version/);
   assert.match(cards, /Unchanged in the night delivery/);
+  const unchanged = cards.match(/<article[^>]+data-comparison-id="00002".*?<\/article>/s)[0];
+  assert.match(unchanged, /Current.*00002_combined.webp.*After.*Unchanged in the night delivery/s);
+  assert.equal(unchanged.match(/<img\b/g).length, 1);
+  assert.match(unchanged, /Flag for change/);
+  assert.doesNotMatch(cards.slice(0,cards.indexOf(unchanged)), /Flag for change/);
   assert.equal(g.node("detail").classList.contains("open"), false);
   const target = { dataset: { backgroundChoice: "previous" }, closest: () => ({ dataset: { comparisonId: "00001" } }) };
   await g.node("grid").onclick({ target });
@@ -93,6 +99,16 @@ test("the vampire review includes unchanged art and can choose the matched prior
   assert.deepEqual(g.writes.at(-1), { path: "/background", body: [
     { id: "00001", choice: "previous", catalog_version: "base", background_version: 0 },
   ] });
+  const flag = { dataset: { flagChange: "" }, closest: () => ({ dataset: { comparisonId: "00002" } }) };
+  await g.node("grid").onclick({ target: flag });
+  assert.equal(g.writes.at(-1).path, "/verdict");
+  assert.equal(g.writes.at(-1).body[0].id, "00002");
+  assert.equal(g.writes.at(-1).body[0].verdict, "flag");
+  assert.equal(g.node("comparison-flag-00002")["aria-pressed"], "true");
+  assert.equal(g.node("detail").classList.contains("open"), false);
+  await g.node("grid").onclick({ target: flag });
+  assert.equal(g.writes.at(-1).body[0].verdict, "clear");
+  assert.equal(g.node("comparison-flag-00002").textContent, "Flag for change");
   g.run('openDetail("00002")');
   assert.match(g.node("bmessage").textContent, /Unchanged/);
   assert.match(g.node("dmeta").innerHTML, /Before this delivery.*Flagged.*Daylight/);

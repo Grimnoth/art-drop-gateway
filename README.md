@@ -23,6 +23,7 @@ gives the artist a clean list of the flags, and publishes each new release by it
   downloads only the ZIPs that changed, and publishes only the changed items.
 - **Vampire review:** when configured, `/?backgrounds=all` opens the whole vampire collection for a
   single delivery. Scroll through pages of before/after pairs, or filter to unchanged art.
+  Unchanged items have an empty After slot and an inline flag button for missed changes.
   Each changed item has a button to choose which version the gallery should display. The choice switches the background and matching
   composite together. If a later delivery replaces that artwork, its new art stays visible.
 
