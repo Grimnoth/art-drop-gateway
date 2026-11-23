@@ -101,9 +101,11 @@ The update refuses, and the site does not change, when a manifest drops a file, 
 row names another item's file, a file fails its checksum, or an image cannot be read.
 
 A corrections-only release can replace files in the live manifest. Supply the selected ZIP, its
-`<ZIP filename>.sha256` file, and a separate `FILE_INDEX.csv` with `ID`, `Layer`, `Replacement path`,
-and `SHA256` columns. Each listed ID needs all three layers in the batch paths above. The updater
-keeps the full-delivery tag so the scheduled pull of that same release leaves the corrections in place.
+`<ZIP filename>.sha256` file, and a separate `FILE_INDEX.csv` with `ID`, `Layer`, `Replacement path`
+(or `Relative path`), and `SHA256` columns. Each listed ID needs all three layers in the batch paths
+above. The ZIP can hold those paths at its root or in a single folder named after the ZIP without
+the extension. The updater keeps the full-delivery tag so the scheduled pull of that same release
+leaves the corrections in place.
 
 In the repository secrets, set `CORRECTION_DELIVERY` to a JSON object with `repo`, `tag`, `archive`,
 `baseline` (the full delivery currently live), and `count` (the number of IDs in the correction).

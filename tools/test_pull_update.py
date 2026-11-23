@@ -717,18 +717,20 @@ def _(t):
     assert files(store) == before
 
 
-def make_corrections(base, id_, triplet_, *, omit="", duplicate=False, bad_digest=False):
+def make_corrections(base, id_, triplet_, *, omit="", duplicate=False, bad_digest=False, relative_index=False,
+                     enclosing_folder=""):
     src = base / "correction-release"
     src.mkdir()
     archive = src / "Corrections.zip"
     with zipfile.ZipFile(archive, "w") as z, (src / "FILE_INDEX.csv").open("w", encoding="utf-8-sig") as index:
         writer = csv.writer(index)
-        writer.writerow(["ID", "Layer", "Replacement path", "SHA256"])
+        path_column = "Relative path" if relative_index else "Replacement path"
+        writer.writerow(["ID", "Layer", path_column, "SHA256"])
         for kind, directory in zip(KINDS, ("Characters", "Backgrounds", "Combined")):
             path = f"Batch_01_00001-00099/{directory}/{id_}__{kind}.png"
             data = triplet_[kind]
             if kind != omit:
-                z.writestr(path, data)
+                z.writestr(enclosing_folder + path, data)
             row = [id_, kind, path, "0" * 64 if bad_digest and kind == "combined" else hashlib.sha256(data).hexdigest()]
             writer.writerow(row)
             if duplicate and kind == "combined":
@@ -740,6 +742,20 @@ def make_corrections(base, id_, triplet_, *, omit="", duplicate=False, bad_diges
 
 def correction_args(*, baseline="first", count="1"):
     return ("--corrections", "Corrections.zip", "--base-tag", baseline, "--expected-ids", count)
+
+
+@test("a correction with Relative path and an enclosing ZIP folder overlays the intended layers")
+def _(t):
+    store, art = make_store(t)
+    updated = triplet(201)
+    updated["character"] = art["00002"]["character"]
+    src = make_corrections(t, "00002", updated, relative_index=True, enclosing_folder="Corrections/")
+    dry = tool(store, src, *correction_args(), tag="night")
+    assert dry.returncode == 0 and "2 changed files in 1 IDs" in dry.stdout, dry.stderr + dry.stdout
+    r = tool(store, src, *correction_args(), "--apply", tag="night")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert items(store)["00002"]["upd"]["tag"] == "night"
+    assert all(shown(store)["00002", layer] == updated[layer] for layer in KINDS)
 
 
 @test("a correction overlays existing files, preserves notes, and survives a nightly rerun")
@@ -791,7 +807,8 @@ def _(t):
 def _(t):
     store, _ = make_store(t)
     before = shown(store)
-    for n, kwargs in enumerate(({"duplicate": True}, {"omit": "background"}, {"bad_digest": True})):
+    for n, kwargs in enumerate(({"duplicate": True}, {"omit": "background"}, {"bad_digest": True},
+                                {"enclosing_folder": "Other/", "relative_index": True})):
         fixture = t / str(n)
         fixture.mkdir()
         src = make_corrections(fixture, "00002", triplet(201), **kwargs)

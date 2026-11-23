@@ -343,7 +343,8 @@ def correction_manifest(source, tag, archive, expected_ids, names, old, work, de
 
     assets, members, ids = dict(old), {}, {}
     for row in read_csv(source.fetch(tag, index, work)):
-        id_, kind, path, digest = (row.get(k) for k in ("ID", "Layer", "Replacement path", "SHA256"))
+        id_, kind, digest = (row.get(k) for k in ("ID", "Layer", "SHA256"))
+        path = row.get("Replacement path", row.get("Relative path"))
         if kind not in KINDS or not batch_path(path, id_, kind) or not HEX64.fullmatch(digest or ""):
             raise Refuse("invalid identity, path or SHA256 in the correction index")
         rel = f"ID{id_}/{id_}__{kind}.png"
@@ -626,14 +627,20 @@ def run(a, store, work):
             continue
         path, batch = fetch_verified(source, tag, name, download, sums), {}
         with zipfile.ZipFile(path) as z:
+            member_prefix = ""
             if archive:
                 images = [m.filename for m in z.infolist() if not m.is_dir() and m.filename.lower().endswith(".png")]
-                if len(images) != len(batch_members) or set(images) != set(batch_members):
+                image_paths = set(images)
+                if image_paths != batch_members.keys():
+                    member_prefix = f"{Path(archive).stem}/"
+                    image_paths = {p.removeprefix(member_prefix) for p in images if p.startswith(member_prefix)}
+                if len(images) != len(batch_members) or image_paths != batch_members.keys():
                     raise Refuse("the correction ZIP does not contain exactly the indexed PNGs")
             for m in z.infolist():
-                rel = None if m.is_dir() else wanted.get(m.filename)
+                member = m.filename.removeprefix(member_prefix)
+                rel = None if m.is_dir() else wanted.get(member)
                 if rel is None:
-                    if not m.is_dir() and not ((batch_members is not None and m.filename in batch_members)
+                    if not m.is_dir() and not ((batch_members is not None and member in batch_members)
                             or (m.filename.startswith("Images/") and REL.match(m.filename[7:]))):
                         unexpected.append(m.filename)
                     continue
