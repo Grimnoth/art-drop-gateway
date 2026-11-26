@@ -333,20 +333,62 @@ def batch_path(path, id_, kind):
     return None
 
 
-def correction_manifest(source, tag, archive, expected_ids, names, old, work, dest):
-    index, checksum = "FILE_INDEX.csv", f"{archive}.sha256"
-    if not {archive, index, checksum}.issubset(names):
-        raise Refuse("the correction release needs the selected ZIP, its SHA256 file and FILE_INDEX.csv")
-    sums = read_sums(source.fetch(tag, checksum, work))
-    if set(sums) != {archive}:
-        raise Refuse("the correction checksum file must name only the selected ZIP")
+def image_correction_rows(rows, archive):
+    """Match the layered index to the checked ZIP and hash its replacement images."""
+    expected = {}
+    for row in rows:
+        id_ = row.get("ID") or ""
+        if not re.fullmatch(r"[0-9]{5}", id_):
+            raise Refuse("invalid ID in the correction index")
+        for kind in KINDS:
+            path = f"Images/ID{id_}/{id_}__{kind}.png"
+            if row.get(kind.title()) != path or path in expected:
+                raise Refuse("invalid or repeated path in the correction index")
+            expected[path] = (id_, kind)
 
-    assets, members, ids = dict(old), {}, {}
-    for row in read_csv(source.fetch(tag, index, work)):
+    with zipfile.ZipFile(archive) as z:
+        enclosing = f"{archive.stem}/"
+        prefix = enclosing if any(name.startswith(enclosing + "Images/") for name in z.namelist()) else ""
+        seen = set()
+        for entry in z.infolist():
+            if (entry.is_dir() or not entry.filename.lower().endswith(".png")
+                    or entry.filename.startswith(prefix + "Review/")):
+                continue
+            path = entry.filename.removeprefix(prefix)
+            if path not in expected or path in seen:
+                raise Refuse("the correction ZIP does not contain exactly the indexed PNGs")
+            seen.add(path)
+            with z.open(entry) as image:
+                id_, kind = expected[path]
+                yield id_, kind, entry.filename, hashlib.file_digest(image, "sha256").hexdigest()
+        if seen != expected.keys():
+            raise Refuse("the correction ZIP does not contain exactly the indexed PNGs")
+
+
+def batch_correction_rows(rows):
+    for row in rows:
         id_, kind, digest = (row.get(k) for k in ("ID", "Layer", "SHA256"))
         path = row.get("Replacement path", row.get("Relative path"))
         if kind not in KINDS or not batch_path(path, id_, kind) or not HEX64.fullmatch(digest or ""):
             raise Refuse("invalid identity, path or SHA256 in the correction index")
+        yield id_, kind, path, digest
+
+
+def correction_manifest(source, tag, archive, expected_ids, names, old, work, dest):
+    indexes = {"FILE_INDEX.csv", "File_Index.csv"}.intersection(names)
+    checksum = f"{archive}.sha256"
+    if len(indexes) != 1 or not {archive, checksum}.issubset(names):
+        raise Refuse("the correction release needs the selected ZIP, its SHA256 file and one file index CSV")
+    index = indexes.pop()
+    sums = read_sums(source.fetch(tag, checksum, work))
+    if set(sums) != {archive}:
+        raise Refuse("the correction checksum file must name only the selected ZIP")
+
+    rows = read_csv(source.fetch(tag, index, work))
+    archive_path = fetch_verified(source, tag, archive, work, sums) if index == "File_Index.csv" else None
+    indexed = image_correction_rows(rows, archive_path) if archive_path else batch_correction_rows(rows)
+    assets, members, ids = dict(old), {}, {}
+    for id_, kind, path, digest in indexed:
         rel = f"ID{id_}/{id_}__{kind}.png"
         if rel not in old:
             raise Refuse("a correction must replace a file in the existing manifest")
@@ -374,7 +416,7 @@ def correction_manifest(source, tag, archive, expected_ids, names, old, work, de
         writer = csv.DictWriter(f, fieldnames=["ID"] + [f"{k}_{field}" for k in KINDS for field in ("relative_path", "sha256")])
         writer.writeheader()
         writer.writerows(items.values())
-    return sums, members
+    return sums, members, archive_path
 
 
 def check_manifests_agree(new, new_index):
@@ -528,9 +570,11 @@ def run(a, store, work):
         folder.mkdir()
     names = source.assets(tag)
     mask(*names)
-    batch_members = None
+    batch_members = correction_zip = None
     if archive:
-        sums, batch_members = correction_manifest(source, tag, archive, a.expected_ids, names, old, download, new_index)
+        sums, batch_members, correction_zip = correction_manifest(
+            source, tag, archive, a.expected_ids, names, old, download, new_index
+        )
     else:
         # Accept the delivery's project prefix as well as the original checksum names.
         sum_files = [n for n in names if re.fullmatch(r"(?:[\w.-]+_)?SHA256SUMS[\w.-]*\.txt", n)]
@@ -625,10 +669,10 @@ def run(a, store, work):
                 raise Refuse(f"{PROGRESS} says ZIP {n} is done, but {prefix}results/{n}.json is missing. Empty {PROGRESS} and rerun.")
             results.update(json.loads(batch_file.read_text()))
             continue
-        path, batch = fetch_verified(source, tag, name, download, sums), {}
+        path, batch = correction_zip or fetch_verified(source, tag, name, download, sums), {}
         with zipfile.ZipFile(path) as z:
             member_prefix = ""
-            if archive:
+            if archive and not correction_zip:
                 images = [m.filename for m in z.infolist() if not m.is_dir() and m.filename.lower().endswith(".png")]
                 image_paths = set(images)
                 if image_paths != batch_members.keys():
@@ -640,7 +684,7 @@ def run(a, store, work):
                 member = m.filename.removeprefix(member_prefix)
                 rel = None if m.is_dir() else wanted.get(member)
                 if rel is None:
-                    if not m.is_dir() and not ((batch_members is not None and member in batch_members)
+                    if not correction_zip and not m.is_dir() and not ((batch_members is not None and member in batch_members)
                             or (m.filename.startswith("Images/") and REL.match(m.filename[7:]))):
                         unexpected.append(m.filename)
                     continue

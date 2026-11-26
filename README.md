@@ -120,11 +120,17 @@ above. The ZIP can hold those paths at its root or in a single folder named afte
 the extension. The updater keeps the full-delivery tag so the scheduled pull of that same release
 leaves the corrections in place.
 
+An alternate correction layout uses `File_Index.csv` with one row per ID and `ID`, `Character`,
+`Background`, and `Combined` columns. Each layer path is `Images/IDnnnnn/nnnnn__<kind>.png`.
+The updater checks the ZIP against its sidecar checksum, hashes each indexed layer, and skips reference
+images under `Review/`.
+
 In the repository secrets, set `CORRECTION_DELIVERY` to a JSON object with `repo`, `tag`, `archive`,
 `baseline` (the full delivery currently live), and `count` (the number of IDs in the correction).
 Set `CORRECTION_REPO_TOKEN` if the regular delivery token cannot read that repo. Dispatch **Pull the
 artist's art** with **Overlay the configured correction delivery**. Select **Only report what changed**
-for a preview that reads the index without downloading the artwork.
+for a preview without publishing. For the layered `File_Index.csv` format, the runner downloads the
+ZIP during preview to check and hash the layers.
 
 ## Project fields
 

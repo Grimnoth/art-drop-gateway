@@ -744,6 +744,58 @@ def correction_args(*, baseline="first", count="1"):
     return ("--corrections", "Corrections.zip", "--base-tag", baseline, "--expected-ids", count)
 
 
+def make_image_corrections(source, artwork, *, wrong_path=False, extra_image=False, bad_checksum=False):
+    source.mkdir()
+    archive = source / "Corrections.zip"
+    with (source / "File_Index.csv").open("w", newline="") as f, zipfile.ZipFile(archive, "w") as z:
+        writer = csv.writer(f)
+        writer.writerow(["ID", "Category", "Character", "Background", "Combined"])
+        paths = [f"Images/ID00002/00002__{layer}.png" for layer in KINDS]
+        writer.writerow(["00002", "Detail", *paths[:2], paths[0] if wrong_path else paths[2]])
+        for path, layer in zip(paths, KINDS):
+            z.writestr(f"Corrections/{path}", artwork[layer])
+        z.writestr("Corrections/Review/Before/00002__combined.png", triplet(20)["combined"])
+        if extra_image:
+            z.writestr("Corrections/Images/ID00001/00001__combined.png", triplet(20)["combined"])
+    digest = "0" * 64 if bad_checksum else hashlib.sha256(archive.read_bytes()).hexdigest()
+    (source / "Corrections.zip.sha256").write_text(f"{digest}  Corrections.zip\n")
+    return source
+
+
+@test("a layered Images correction publishes only indexed artwork and skips review references")
+def _(t):
+    store, art = make_store(t)
+    updated = triplet(201)
+    src = make_image_corrections(t / "correction-release", updated)
+    before = files(store)
+    preview = tool(store, src, *correction_args(), tag="correction")
+    assert preview.returncode == 0 and "3 changed files in 1 IDs" in preview.stdout, preview.stderr + preview.stdout
+    assert files(store) == before
+
+    result = tool(store, src, *correction_args(), "--apply", tag="correction")
+    assert result.returncode == 0, result.stderr + result.stdout
+    visible = shown(store)
+    assert visible["tag"] == "first"
+    assert visible["00002", "measured"]["upd"]["tag"] == "correction"
+    for layer in KINDS:
+        assert visible["00002", layer] == updated[layer]
+        assert visible["00002", layer, "thumb"]
+        assert visible["00001", layer] == art["00001"][layer]
+    assert not any("/Review/" in key for key in files(store))
+
+
+@test("a layered Images correction preview refuses unindexed art, mismatched paths, and a bad archive checksum")
+def _(t):
+    store, _ = make_store(t)
+    before = files(store)
+    for reason, defect in (("indexed", {"extra_image": True}), ("path", {"wrong_path": True}),
+                           ("does not match", {"bad_checksum": True})):
+        src = make_image_corrections(t / next(iter(defect)), triplet(201), **defect)
+        preview = tool(store, src, *correction_args(), tag="correction")
+        assert preview.returncode == 2 and reason in preview.stderr, preview.stderr + preview.stdout
+        assert files(store) == before
+
+
 @test("a correction with Relative path and an enclosing ZIP folder overlays the intended layers")
 def _(t):
     store, art = make_store(t)
