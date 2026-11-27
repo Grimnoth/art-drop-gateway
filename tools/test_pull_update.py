@@ -981,5 +981,74 @@ def _(t):
         assert files(store) == before
 
 
+def make_final_bundle(source, artwork, *, defect=""):
+    source.mkdir()
+    archive = source / "Selected.zip"
+    with (source / "Selected_File_Index.csv").open("w", newline="") as f, zipfile.ZipFile(archive, "w") as z:
+        writer = csv.writer(f)
+        writer.writerow(["id", "layer", "file", "sha256"])
+        for id_, triplet_ in artwork.items():
+            for layer, directory in zip(KINDS, ("Characters", "Backgrounds", "Combined")):
+                filename = f"{directory}\\{id_}__{layer}.png"
+                data = triplet_[layer]
+                digest = hashlib.sha256(data).hexdigest()
+                if defect == "digest" and id_ == "00002" and layer == "combined":
+                    digest = "0" * 64
+                z.writestr("Selected package\\" + filename, data)
+                if defect == "path" and id_ == "00001" and layer == "background":
+                    filename = "Backgrounds\\00003__background.png"
+                writer.writerow([id_, layer, filename, digest])
+        if defect == "extra":
+            z.writestr("Selected package/Combined/00003__combined.png", triplet(15)["combined"])
+        z.writestr("Selected package/Review/preview.jpg", b"reference")
+    (source / "Selected.zip.sha256").write_text(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  Selected.zip\n")
+    return source
+
+
+FINAL_BUNDLE_ARGS = ("--corrections", "Selected.zip", "--base-tag", "first",
+                     "--expected-ids", "2", "--final-index", "Selected_File_Index.csv")
+FINAL_BUNDLE_CHOICES = {"00001": {"number": 2, "label": "Harbor"},
+                        "00002": {"number": 1, "label": "Docks"}}
+
+
+@test("a three-folder final pack publishes exact layers and tags unchanged picks for the same final delivery")
+def _(t):
+    store, art = make_store(t)
+    fresh = triplet(201)
+    source = make_final_bundle(t / "final", {"00001": fresh, "00002": art["00002"]})
+    env = {"FINAL_SELECTIONS": json.dumps(FINAL_BUNDLE_CHOICES)}
+    before = files(store)
+    preview = tool(store, source, *FINAL_BUNDLE_ARGS, tag="finals", env=env)
+    assert preview.returncode == 0 and "3 changed files in 1 IDs" in preview.stdout, preview.stderr + preview.stdout
+    assert files(store) == before
+    result = tool(store, source, *FINAL_BUNDLE_ARGS, "--apply", tag="finals", env=env)
+    assert result.returncode == 0, result.stderr + result.stdout
+    visible = shown(store)
+    assert visible["tag"] == "first"
+    for kind in KINDS:
+        assert visible["00001", kind] == fresh[kind]
+        assert visible["00002", kind] == art["00002"][kind]
+        assert visible["00003", kind] == art["00003"][kind]
+    for id_, choice in FINAL_BUNDLE_CHOICES.items():
+        assert items(store)[id_]["final_option"] == {"tag": "finals", **choice}
+    assert "final_option" not in items(store)["00003"]
+    published = files(store)
+    assert tool(store, source, *FINAL_BUNDLE_ARGS, "--apply", tag="finals", env=env).returncode == 0
+    assert files(store) == published
+
+
+@test("the final pack refuses mismatched IDs, extra artwork, corrupt unchanged layers or missing choice labels")
+def _(t):
+    store, art = make_store(t)
+    before = files(store)
+    for defect in ("path", "extra", "digest", "choice"):
+        source = make_final_bundle(t / defect, {"00001": triplet(201), "00002": art["00002"]}, defect=defect)
+        choices = FINAL_BUNDLE_CHOICES if defect != "choice" else {"00001": FINAL_BUNDLE_CHOICES["00001"]}
+        result = tool(store, source, *FINAL_BUNDLE_ARGS, "--apply", tag="finals",
+                      env={"FINAL_SELECTIONS": json.dumps(choices)})
+        assert result.returncode == 2 and "REFUSED" in result.stderr, result.stderr + result.stdout
+        assert files(store) == before
+
+
 print(f"{failures} FAILED" if failures else "all passed")
 sys.exit(1 if failures else 0)

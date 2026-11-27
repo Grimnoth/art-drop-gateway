@@ -392,6 +392,51 @@ def correction_manifest(source, tag, archive, expected_ids, names, old, work, de
     return sums, write_correction_index(indexed, old, expected_ids, dest), archive_path
 
 
+def final_bundle_manifest(a, source, tag, names, old, work, dest):
+    checksum = f"{a.corrections}.sha256"
+    if not {a.corrections, a.final_index, checksum}.issubset(names):
+        raise Refuse("the final release needs the ZIP, its SHA256 sidecar and the final file index")
+    sums = read_sums(source.fetch(tag, checksum, work))
+    if set(sums) != {a.corrections}:
+        raise Refuse("the final checksum sidecar must name only the selected ZIP")
+
+    indexed, ids = {}, set()
+    for row in read_csv(source.fetch(tag, a.final_index, work)):
+        id_, kind, path, digest = (row.get(key) or "" for key in ("id", "layer", "file", "sha256"))
+        path = path.replace("\\", "/")
+        if (not re.fullmatch(r"[0-9]{5}", id_) or kind not in KINDS or not HEX64.fullmatch(digest)
+                or path != f"{LAYER_DIRS[kind]}/{id_}__{kind}.png" or path in indexed):
+            raise Refuse("invalid or repeated artwork in the final file index")
+        indexed[path] = (id_, kind, digest)
+        ids.add(id_)
+
+    try:
+        choices = json.loads(setting("FINAL_SELECTIONS"))
+    except json.JSONDecodeError as exc:
+        raise Refuse("FINAL_SELECTIONS must be a JSON object of finalized choices") from exc
+    if not isinstance(choices, dict) or choices.keys() != ids or len(ids) != a.expected_ids:
+        raise Refuse("the final selections do not match the indexed IDs and expected count")
+    final = {}
+    for id_, choice in choices.items():
+        if (not isinstance(choice, dict) or type(choice.get("number")) is not int or choice["number"] < 1
+                or not isinstance(choice.get("label"), str) or not choice["label"].strip()):
+            raise Refuse("each final selection must have an option number and label")
+        final[id_] = {"tag": tag, "number": choice["number"], "label": choice["label"]}
+
+    archive = fetch_verified(source, tag, a.corrections, work, sums)
+    records = []
+    with zipfile.ZipFile(archive) as z:
+        for path, entry in indexed_art_members(z, indexed, set(LAYER_DIRS.values())).items():
+            id_, kind, digest = indexed[path]
+            with z.open(entry) as image:
+                if hashlib.file_digest(image, "sha256").hexdigest() != digest:
+                    raise Refuse("a final PNG does not match its indexed SHA256")
+            records.append((id_, kind, entry.filename, digest))
+    members = write_correction_index(records, old, a.expected_ids, dest)
+    print(f"Checked {len(records)} final PNGs.", flush=True)
+    return sums, members, archive, final
+
+
 def write_correction_index(indexed, old, expected_ids, dest):
     assets, members, ids = dict(old), {}, {}
     for id_, kind, path, digest in indexed:
@@ -449,31 +494,32 @@ def option_index(rows, expected_ids, expected_options):
     return grouped, digests
 
 
-def option_members(z, digests):
-    """Match the indexed art inside Images/, allowing one enclosing folder."""
+def indexed_art_members(z, indexed, directories):
+    """Match indexed artwork in expected top-level directories, allowing one enclosing folder."""
     members, roots = {}, set()
     for entry in z.infolist():
-        if entry.is_dir():
+        name = entry.filename.replace("\\", "/")
+        if name.endswith("/"):
             continue
-        parent, _, tail = entry.filename.partition("/")
-        if parent == "Images":
-            root, path = "", entry.filename
-        elif parent not in (".", "..", "") and tail.startswith("Images/"):
+        parent, _, tail = name.partition("/")
+        if parent in directories:
+            root, path = "", name
+        elif parent not in (".", "..", "") and tail.split("/", 1)[0] in directories:
             root, path = parent, tail
         else:
             continue
-        if path not in digests or path in members:
-            raise Refuse("the option ZIP contains unexpected or repeated artwork")
+        if path not in indexed or path in members:
+            raise Refuse("the ZIP contains unexpected or repeated artwork")
         members[path] = entry
         roots.add(root)
-    if len(roots) != 1 or members.keys() != digests.keys():
-        raise Refuse("the option ZIP does not contain exactly the indexed artwork in one folder")
+    if len(roots) != 1 or members.keys() != indexed.keys():
+        raise Refuse("the ZIP does not contain exactly the indexed artwork in one folder")
     return members
 
 
 def unpack_options(archive, digests, work):
     with zipfile.ZipFile(archive) as z:
-        for path, entry in option_members(z, digests).items():
+        for path, entry in indexed_art_members(z, digests, {"Images"}).items():
             out = work / path
             out.parent.mkdir(parents=True, exist_ok=True)
             with z.open(entry) as source, out.open("wb") as dest:
@@ -544,7 +590,7 @@ def selected_option_manifest(a, source, tag, names, old, work, dest):
         raise Refuse("OPTION_SELECTIONS must have at least one selection")
     sums, archive, grouped, digests = load_option_delivery(a, source, tag, names, work)
     with zipfile.ZipFile(archive) as z:
-        members = option_members(z, digests)
+        members = indexed_art_members(z, digests, {"Images"})
     indexed, final = [], {}
     for id_, number in choices.items():
         if type(number) is not int or number not in grouped.get(id_, {}):
@@ -747,7 +793,10 @@ def run(a, store, work):
         sums, batch_members, correction_zip, final = selected_option_manifest(
             a, source, tag, names, old, download, new_index
         )
-        print(f"{len(final)} final options selected.", flush=True)
+    elif getattr(a, "final_index", None):
+        sums, batch_members, correction_zip, final = final_bundle_manifest(
+            a, source, tag, names, old, download, new_index
+        )
     elif archive:
         sums, batch_members, correction_zip = correction_manifest(
             source, tag, archive, a.expected_ids, names, old, download, new_index
@@ -767,6 +816,8 @@ def run(a, store, work):
         else:
             extract_index(index_path, new_index)
 
+    if final:
+        print(f"{len(final)} final options selected.", flush=True)
     new = load_assets(new_index)
     changed, removed = diff(old, new)
     if removed:
@@ -938,9 +989,12 @@ def main():
     p.add_argument("--option-index", metavar="CSV", help="required file index for an options release")
     p.add_argument("--finalize-options", action="store_true", help="publish the options selected in OPTION_SELECTIONS")
     p.add_argument("--base-tag", help="required live full-delivery tag for a corrections overlay")
+    p.add_argument("--final-index", metavar="CSV", help="final selection index for a selected-only corrections ZIP")
     p.add_argument("--expected-ids", type=int, help="required number of IDs for a correction or options release")
     p.add_argument("--expected-options", type=int, help="required number of artwork options")
     a = p.parse_args()
+    if a.final_index is not None and (not a.corrections or not re.fullmatch(r"\w[\w.-]*\.csv", a.final_index)):
+        p.error("--final-index requires --corrections and a CSV filename")
     if a.options:
         if (not a.tag or not re.fullmatch(r"\w[\w.-]*\.zip", a.options)
                 or not re.fullmatch(r"\w[\w.-]*\.csv", a.option_index or "")

@@ -83,8 +83,15 @@ jobs:
           archive=$(jq -er '.archive | strings | select(length > 0)' <<< "$CORRECTION_DELIVERY")
           baseline=$(jq -er '.baseline | strings | select(length > 0)' <<< "$CORRECTION_DELIVERY")
           count=$(jq -er '.count | numbers' <<< "$CORRECTION_DELIVERY")
+          final_index=$(jq -er '.final_index // "" | strings' <<< "$CORRECTION_DELIVERY")
+          extra=()
+          if [[ -n "$final_index" ]]; then
+            FINAL_SELECTIONS=$(jq -ce '.final_choices | objects' <<< "$CORRECTION_DELIVERY")
+            export FINAL_SELECTIONS
+            extra=(--final-index "$final_index")
+          fi
           python3 -I tools/pull_update.py --repo="$repo" --corrections="$archive" \
-            --base-tag="$baseline" --expected-ids="$count" ${{ inputs.dry_run && ' ' || '--apply' }} -- "$tag"
+            --base-tag="$baseline" --expected-ids="$count" "${extra[@]}" ${{ inputs.dry_run && ' ' || '--apply' }} -- "$tag"
       - name: Publish options
         if: ${{ inputs.options || inputs.finalize_options }}
         env:
