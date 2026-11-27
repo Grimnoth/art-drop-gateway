@@ -35,11 +35,14 @@ wr("r2", "object", "put", "art-drop-gateway/meta/items.json", "--local", "--file
 // Stand-in art, because the real art lives only in R2. The Worker serves bytes by path and never decodes them.
 const fakeThumb = join(state, "thumb.webp"), fakeFull = join(state, "full.png");
 const optionsPage = join(state, "options.html");
+const fakeVideo = join(state, "sample.mp4");
+writeFileSync(fakeVideo, Buffer.from(Array.from({ length: 300 }, (_, i) => i % 256)));
 writeFileSync(optionsPage, "<!doctype html><title>Synthetic art options</title>");
 writeFileSync(fakeThumb, randomBytes(4000));
 writeFileSync(fakeFull, randomBytes(200000));
 wr("r2", "object", "put", "art-drop-gateway/thumbs/00001_combined.webp", "--local", "--file", fakeThumb);
 wr("r2", "object", "put", "art-drop-gateway/Images/ID00001/00001__combined.png", "--local", "--file", fakeFull);
+wr("r2", "object", "put", "art-drop-gateway/approved-videos/00001.mp4", "--local", "--file", fakeVideo);
 const V = "r/0123456789abcdef";
 wr("r2", "object", "put", "art-drop-gateway/meta/option-deliveries/synthetic-release.html", "--local", "--file", optionsPage);
 wr("r2", "object", "put", `art-drop-gateway/${V}/Images/ID00001/00001__character.png`, "--local", "--file", fakeFull);
@@ -106,6 +109,35 @@ try {
       assert.equal(download.headers.get("content-disposition"), `attachment; filename="${filename}"`);
       assert.deepEqual(Buffer.from(await download.arrayBuffer()), readFileSync(fakeFull));
     }
+  });
+  await test("approved clips support private HEAD and video ranges for authenticated playback", async () => {
+    const path = "/animation/00001.mp4", bytes = readFileSync(fakeVideo);
+    for (const method of ["HEAD", "GET"]) {
+      assert.equal((await get(path, undefined, { method })).status, 401);
+      assert.equal((await get("/animation/00002.mp4", ada, { method })).status, 404);
+    }
+    const info = await get(path, ada, { method: "HEAD" });
+    assert.equal(info.status, 200);
+    assert.equal(info.headers.get("content-type"), "video/mp4");
+    assert.equal(info.headers.get("content-length"), "300");
+    assert.equal(info.headers.get("accept-ranges"), "bytes");
+    assert.equal(await info.text(), "");
+    const full = await get(path, ada);
+    assert.equal(full.status, 200);
+    assert.deepEqual(Buffer.from(await full.arrayBuffer()), bytes);
+    for (const [range, start, stop] of [["0-1", 0, 2], ["290-", 290, 300], ["-5", 295, 300], ["290-999", 290, 300]]) {
+      const part = await get(path, ada, { headers: { Range: "bytes=" + range } });
+      assert.equal(part.status, 206);
+      assert.equal(part.headers.get("content-range"), `bytes ${start}-${stop-1}/300`);
+      assert.equal(part.headers.get("content-length"), String(stop-start));
+      assert.deepEqual(Buffer.from(await part.arrayBuffer()), bytes.subarray(start, stop));
+    }
+    const invalid = await get(path, ada, { headers: { Range: "bytes=301-" } });
+    assert.equal(invalid.status, 416);
+    assert.equal(invalid.headers.get("content-range"), "bytes */300");
+    const replaced = await get(path, ada, { headers: { Range: "bytes=0-1", "If-Range": '"old-version"' } });
+    assert.equal(replaced.status, 200);
+    assert.deepEqual(Buffer.from(await replaced.arrayBuffer()), bytes);
   });
   await test("a release options page is available only behind the password gate", async () => {
     const path = "/options/synthetic-release";

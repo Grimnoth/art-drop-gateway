@@ -11,7 +11,7 @@ try { reviewState = await import("./review-state.mjs"); } catch (e) {
   if (e.code !== "ERR_MODULE_NOT_FOUND") throw e;
 }
 
-function gallery({ failSave = false, data, settings = {}, search = "", backgroundResponse } = {}) {
+function gallery({ failSave = false, data, settings = {}, search = "", backgroundResponse, animationResponse = async () => ({ ok: false }) } = {}) {
   const nodes = new Map(), writes = [];
   let saved = JSON.stringify(settings);
   const node = (id) => {
@@ -19,6 +19,9 @@ function gallery({ failSave = false, data, settings = {}, search = "", backgroun
       const classes = new Set();
       nodes.set(id, { value: id === "filter" ? "all" : "", style: {}, dataset: {},
         setAttribute(name, value) { this[name] = value; },
+        getAttribute(name) { return this[name] ?? null; },
+        removeAttribute(name) { delete this[name]; },
+        pause() {}, load() {},
         insertAdjacentHTML(_position, content) { this.innerHTML = (this.innerHTML ?? "") + content; },
         classList: { add: (...s) => s.forEach((x) => classes.add(x)), remove: (s) => classes.delete(s), contains: (s) => classes.has(s),
           toggle: (s, force) => force ? classes.add(s) : classes.delete(s) } });
@@ -31,6 +34,7 @@ function gallery({ failSave = false, data, settings = {}, search = "", backgroun
     matchMedia: () => ({ matches: false }), scrollTo() {}, setTimeout() {},
     fetch: async (path, options) => {
       if (path === "/data") return { json: async () => ({ review_enabled: true, ...data }) };
+      if (path.startsWith("/animation/")) return animationResponse(path, options);
       writes.push({ path, body: JSON.parse(options.body) });
       return { ok: !failSave, status: failSave ? 503 : 200, json: async () => backgroundResponse };
     } });
@@ -53,6 +57,45 @@ const deliveryData = {
     { id: "00003", type: "Pirate", upd: { tag: "delivery-2026-11-14", at: 10 } },
   ],
 };
+
+test("only an approved clip loads next to the still, and the next pirate clears the player", async () => {
+  const calls = [];
+  const g = gallery({
+    data: { ...deliveryData, review_enabled: false },
+    animationResponse: async (path, options) => {
+      calls.push([path, options.method]);
+      return { ok: path === "/animation/00001.mp4" };
+    },
+  });
+  await g.run("init()");
+  assert.deepEqual(calls, []);
+  await g.run('openDetail("00001")');
+  assert.equal(g.node("dimg").src, "/full/00001/combined.png");
+  assert.equal(g.node("danimation").hidden, false);
+  assert.equal(g.node("dvideo").src, "/animation/00001.mp4");
+  assert.deepEqual(calls, [["/animation/00001.mp4", "HEAD"]]);
+  await g.run('openDetail("00002")');
+  assert.equal(g.node("danimation").hidden, true);
+  assert.equal(g.node("dvideo").src, undefined);
+  assert.equal(g.node("dimg").src, "/full/00002/combined.png");
+});
+
+test("a late approval response cannot reopen a player after leaving a pirate", async () => {
+  let showFirst;
+  const g = gallery({
+    data: { ...deliveryData, review_enabled: false },
+    animationResponse: (path) => path === "/animation/00001.mp4"
+      ? new Promise(resolve => { showFirst = resolve; }) : Promise.resolve({ ok: false }),
+  });
+  await g.run("init()");
+  const first = g.run('openDetail("00001")');
+  assert.equal(typeof showFirst, "function");
+  g.run("close()");
+  showFirst({ ok: true });
+  await first;
+  assert.equal(g.node("danimation").hidden, true);
+  assert.equal(g.node("dvideo").src, undefined);
+});
 
 test("the delivery filter shows only the latest batch", async () => {
   const g = gallery({ data: deliveryData });

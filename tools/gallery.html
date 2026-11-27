@@ -55,6 +55,11 @@ nav{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:cente
 #stage{align-self:start;position:relative;background:repeating-conic-gradient(#3a3d45 0 25%,#262830 0 50%) 0 0/24px 24px;border-radius:8px;overflow:auto;max-height:calc(100vh - 80px)}
 #stage img{display:block;width:100%}
 #stage.zoom img{width:auto;max-width:none}
+#detail-media{display:grid;align-content:start;min-width:0;gap:14px}
+@media(min-width:821px){#detail-media:has(#danimation:not([hidden])){grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}}
+#danimation{min-width:0}
+#danimation h3{margin:0 0 6px;font-size:14px}
+#dvideo{display:block;width:100%;aspect-ratio:1;background:var(--panel);border-radius:8px}
 .detailbar{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .detailbar h2{margin:0;font-size:18px}
 #vampire-review{margin:0 0 16px;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:8px}
@@ -225,7 +230,13 @@ body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.
   <figure><figcaption><strong>After</strong> · Night delivery</figcaption><a id="bdelivered-link" target="_blank" rel="noopener"><img id="bdelivered" width="1024" height="1024" alt="Night delivery version"></a><a id="bdelivered-download" download class="download-icon" aria-label="Download night PNG" title="Download night PNG"><span aria-hidden="true">↓</span></a> <button id="bchoose-delivered">Use night background</button></figure>
  </details>
  <p id="bmessage" class="meta review-only" hidden></p>
- <div id="stage"><img id="dimg" alt=""></div>
+ <div id="detail-media">
+  <div id="stage"><img id="dimg" alt=""></div>
+  <section id="danimation" aria-labelledby="danimation-title" hidden>
+   <h3 id="danimation-title">Living photo</h3>
+   <video id="dvideo" controls loop muted playsinline preload="none" aria-labelledby="danimation-title"></video>
+  </section>
+ </div>
  <div class="side">
   <p id="dstatus" class="warn review-only"></p>
   <p id="dfinal" class="meta review-only" hidden></p>
@@ -542,6 +553,29 @@ function openDetail(id,seq=null){DSEQ=seq;
  $("note").value=v?.note||"";$("stage").classList.remove("zoom");
  $("dtitle").textContent=CFG.noun+" "+id;$("detail").dataset.id=id;$("detail").classList.add("open");$("detail").scrollTop=0;
  paintDetail();
+ return loadDetailAnimation(id);
+}
+let detailAnimationRequest=0;
+function clearDetailAnimation(){
+ detailAnimationRequest++;
+ $("danimation").hidden=true;
+ const video=$("dvideo");
+ if(video.getAttribute("src")){
+  video.pause();video.removeAttribute("src");video.load();
+ }
+}
+async function loadDetailAnimation(id){
+ clearDetailAnimation();
+ const request=detailAnimationRequest,path="/animation/"+id+".mp4";
+ try{
+  const response=await fetch(path,{method:"HEAD"});
+  if(!response.ok||request!==detailAnimationRequest)return;
+  $("dvideo").poster=fullUrl(byId[id],"combined");
+  $("dvideo").src=path;
+  $("danimation").hidden=false;
+ }catch{
+  // The still and its viewer tools work even when the video check is unavailable.
+ }
 }
 function paintBackground(d){
  const option=backgroundOption(d,backgroundArchive);
@@ -632,7 +666,7 @@ function step(n){
  // Opened from the artist list: the arrows walk that list, not the grid.
  if(DSEQ){const nx=DSEQ[DSEQ.indexOf(id)+n];if(nx)openDetail(nx,DSEQ);return}
  const i=list.findIndex(d=>d.id==id),nx=list[i+n];if(!nx)return;page=Math.floor((i+n)/pageSize);cur=(i+n)%pageSize;render();openDetail(nx.id)}
-function close(){$("detail").classList.remove("open");$("dimg").src="";DSEQ=null}
+function close(){$("detail").classList.remove("open");$("dimg").src="";clearDetailAnimation();DSEQ=null}
 const ATABS={rereview:["Awaiting re-review",id=>needsReReview(id)],send:["Sent to you",id=>stOf(id)=="send"],open:["All open flags",id=>stOf(id)=="send"||stOf(id)==""],fixed:["Fixed",id=>stOf(id)=="fixed"]};
 function artistRows(tab){
  const noted=$("artnotes").checked;
@@ -814,7 +848,7 @@ $("dok").onclick=()=>dSave("ok");$("dflag").onclick=()=>dSave("flag");$("dclear"
 document.onkeydown=e=>{
  if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;
  const open=$("detail").classList.contains("open");
- if(open){if(e.key=="Escape")close();if(e.key=="ArrowRight")step(1);if(e.key=="ArrowLeft")step(-1);if(!REVIEW_ENABLED||isArtist())return;if(e.key=="f")dSave("flag");if(e.key=="o")dSave("ok");return}
+ if(open){if(e.key=="Escape")close();if(e.target===$("dvideo"))return;if(e.key=="ArrowRight")step(1);if(e.key=="ArrowLeft")step(-1);if(!REVIEW_ENABLED||isArtist())return;if(e.key=="f")dSave("flag");if(e.key=="o")dSave("ok");return}
  if(backgroundQueue)return;
  if(!REVIEW_ENABLED&&(e.key==="Enter"||e.key===" ")){
   const tile=e.target.closest(".tile");
