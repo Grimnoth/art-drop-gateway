@@ -18,7 +18,8 @@ body.viewer .review-only{display:none!important}
 #trait-filters{align-self:start;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:8px}
 #trait-filters summary{cursor:pointer;padding:10px 12px;overflow-wrap:anywhere}
 #trait-filters>summary{font-weight:650}
-#trait-groups details{border-top:1px solid var(--line)}
+#trait-groups details,.trait-shortcut{border-top:1px solid var(--line)}
+#trait-groups .trait-shortcut{padding:6px}
 .trait-values{display:grid;gap:2px;padding:0 6px 8px}
 .trait-choice{display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;background:none;border-color:transparent;min-width:0}
 .trait-choice span:first-child{overflow-wrap:anywhere}
@@ -253,7 +254,7 @@ body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.
   </section>
   <section id="danimation" aria-labelledby="danimation-title" hidden>
    <h3 id="danimation-title">Living photo</h3>
-   <video id="dvideo" controls loop muted playsinline preload="none" aria-labelledby="danimation-title"></video>
+   <video id="dvideo" autoplay controls loop muted playsinline preload="none" aria-labelledby="danimation-title"></video>
   </section>
  </div>
  <div class="side">
@@ -304,7 +305,8 @@ const PAGE=60, REASONS=["Character damaged","Edge halo","Cut off","Background cl
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 let TR={},TCOUNT={};
-const viewerTraitValues=new Map();
+const viewerTraitValues=new Map(),ANIMATED_TRAIT="Animated";
+let animatedIds=null;
 let items=[],byId={},ALL={},TRIAGE={},UPD={},ME="",CATALOG="",list=[],page=0,cur=0,dLayer="combined",dReasons=new Set();
 const query = new URLSearchParams(location.search);
 const requestedDelivery = query.get("delivery") || "";
@@ -403,6 +405,14 @@ async function setV(id,verdict,reasons=[],note=""){
  (ALL[id]??={})[ME]=rec;repaint();
  try{await post([rec]);if(!backgroundQueue){fillFilters();compute();render()}return true}
  catch{if(prev)ALL[id][ME]=prev;else delete ALL[id][ME];repaint();return false}
+}
+function withAnimationTrait(item){
+ const approved=animatedIds?.has(item.id);
+ if(!approved&&!Object.hasOwn(item.traits||{},ANIMATED_TRAIT))return item;
+ const traits={...item.traits};
+ delete traits[ANIMATED_TRAIT];
+ if(approved)traits[ANIMATED_TRAIT]="Yes";
+ return {...item,traits};
 }
 const matchesTraits=(d,traits)=>traits.every(([k,v])=>d.traits?.[k]==v);
 function compute(){
@@ -518,6 +528,7 @@ function fillFilters(){
 }
 function fillViewerTraits(){
  viewerTraitValues.clear();
+ if(animatedIds)viewerTraitValues.set(ANIMATED_TRAIT,new Set(["Yes"]));
  const inScope=FILTERS[$("filter").value][1];
  for(const d of items){
   if(!inScope(d))continue;
@@ -529,8 +540,9 @@ function fillViewerTraits(){
  }
  $("trait-filters").hidden=viewerTraitValues.size===0;
  $("trait-filters").open=!matchMedia("(max-width:820px), (max-width:950px) and (max-height:500px)").matches;
- $("trait-groups").innerHTML=viewerTraitCategories().map((category,i)=>
-  `<details${category==="Character Type"?" open":""}><summary>${esc(category)}</summary><div class="trait-values" id="trait-values-${i}"></div></details>`).join("");
+ $("trait-groups").innerHTML=viewerTraitCategories().map((category,i)=>category===ANIMATED_TRAIT
+  ? `<div class="trait-values trait-shortcut" id="trait-values-${i}"></div>`
+  : `<details${category==="Character Type"?" open":""}><summary>${esc(category)}</summary><div class="trait-values" id="trait-values-${i}"></div></details>`).join("");
  paintTraitValues();
 }
 function viewerTraitCounts(category,values){
@@ -543,10 +555,9 @@ function viewerTraitCounts(category,values){
  return counts;
 }
 function viewerTraitCategories(){
- const categories=[...viewerTraitValues.keys()].sort();
- return viewerTraitValues.has("Character Type")
-  ? ["Character Type",...categories.filter(category=>category!=="Character Type")]
-  : categories;
+ const first=[ANIMATED_TRAIT,"Character Type"];
+ return [...first.filter(category=>viewerTraitValues.has(category)),
+  ...[...viewerTraitValues.keys()].filter(category=>!first.includes(category)).sort()];
 }
 function paintTraitValues(){
  const active=document.activeElement;
@@ -554,7 +565,7 @@ function paintTraitValues(){
  for(const [i,category] of viewerTraitCategories().entries()){
   const values=viewerTraitValues.get(category),counts=viewerTraitCounts(category,values);
   $("trait-values-"+i).innerHTML=[...values].sort().map((value,j)=>
-   `<button type="button" class="trait-choice" id="trait-choice-${i}-${j}" data-tk="${esc(category)}" data-tv="${esc(value)}" aria-pressed="${TR[category]===value}"><span>${esc(value)}</span><span class="trait-count">${(counts.get(value)||0).toLocaleString("en-US")}</span></button>`).join("");
+   `<button type="button" class="trait-choice" id="trait-choice-${i}-${j}" data-tk="${esc(category)}" data-tv="${esc(value)}" aria-pressed="${TR[category]===value}"><span>${esc(category===ANIMATED_TRAIT?category:value)}</span><span class="trait-count">${(counts.get(value)||0).toLocaleString("en-US")}</span></button>`).join("");
  }
  if(focusId)$(focusId)?.focus({preventScroll:true});
 }
@@ -729,7 +740,9 @@ async function init(){
  const r=await(await fetch("/data")).json();// Every ID goes into markup and URLs unescaped, so the page keeps only the five-digit IDs that the whole system uses.
  REVIEW_ENABLED=r.review_enabled===true;
  document.body.classList.toggle("viewer",!REVIEW_ENABLED);
- items=(Array.isArray(r.items)?r.items:r.items.items).filter(d=>/^\d{5}$/.test(d.id));ALL=r.verdicts;TRIAGE=r.triage;CATALOG=r.catalog_version;
+ animatedIds=Array.isArray(r.animated_ids)?new Set(r.animated_ids):null;
+ items=(Array.isArray(r.items)?r.items:r.items.items).filter(d=>/^\d{5}$/.test(d.id)).map(withAnimationTrait);
+ ALL=r.verdicts;TRIAGE=r.triage;CATALOG=r.catalog_version;
  backgroundArchive=r.background_options||null;backgroundIds=new Set(backgroundArchive?.ids||[]);backgroundSelections=r.background_selections||{};
  UPD={...r.updates};for(const d of items)if(d.upd)UPD[d.id]=d.upd;
  CFG={...CFG,...r.config};byId=Object.fromEntries(items.map(d=>[d.id,d]));

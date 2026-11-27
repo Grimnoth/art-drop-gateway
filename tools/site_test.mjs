@@ -43,6 +43,13 @@ writeFileSync(fakeFull, randomBytes(200000));
 wr("r2", "object", "put", "art-drop-gateway/thumbs/00001_combined.webp", "--local", "--file", fakeThumb);
 wr("r2", "object", "put", "art-drop-gateway/Images/ID00001/00001__combined.png", "--local", "--file", fakeFull);
 wr("r2", "object", "put", "art-drop-gateway/approved-videos/00001.mp4", "--local", "--file", fakeVideo);
+wr("r2", "object", "put", "art-drop-gateway/approved-videos/00004.mp4", "--local", "--file", fakeVideo);
+wr("r2", "object", "put", "art-drop-gateway/approved-videos/notes.mp4", "--local", "--file", fakeVideo);
+wr("r2", "object", "put", "art-drop-gateway/draft-videos/00002.mp4", "--local", "--file", fakeVideo);
+const emptyVideo = join(state, "empty.mp4");
+writeFileSync(emptyVideo, "");
+wr("r2", "object", "put", "art-drop-gateway/approved-videos/00003.mp4", "--local", "--file", emptyVideo);
+
 const V = "r/0123456789abcdef";
 wr("r2", "object", "put", "art-drop-gateway/meta/option-deliveries/synthetic-release.html", "--local", "--file", optionsPage);
 wr("r2", "object", "put", `art-drop-gateway/${V}/Images/ID00001/00001__character.png`, "--local", "--file", fakeFull);
@@ -178,6 +185,11 @@ try {
     assert.equal((await get("/thumbs/00001_combined.webp", undefined, { headers: { "If-None-Match": a.headers.get("etag") } })).status, 401);
   });
   await test("path traversal is 404", async () => assert.equal((await get("/thumbs/..%2f..%2fx.webp", ada)).status, 404));
+  await test("only nonempty approved videos enter the authenticated animation list", async () => {
+    const data = await (await get("/data", ada)).json();
+    assert.deepEqual(data.animated_ids, ["00001", "00004"]);
+  });
+
   await test("empty data, name from the login, first letter capitalized", async () => { const d = await (await get("/data", ada)).json(); assert.equal(d.items.length, ITEMS); assert.equal(d.config.title, "Art Review"); assert.equal(d.config.artist, "Artist"); assert.equal(d.me, "Ada"); assert.deepEqual(d.verdicts, {}); });
   await test("the login sets the name, not the body", async () => {
     assert.equal((await post("/verdict", max, [{ id: "00005", by: "Ada", verdict: "flag", reasons: ["Edge halo"], note: "=SUM(A1)" }])).status, 200);

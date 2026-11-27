@@ -10,6 +10,7 @@ const FULL = /^\/full\/(\d{5})\/(character|background|combined)\.png$/;
 // Files that pull_update.py uploaded for one release. They are never overwritten.
 const VERSIONED = /^\/o\/(r\/[0-9a-f]{16}\/(?:Images\/ID(\d{5})\/\2__(character|background|combined)\.png|thumbs\/\d{5}_(?:character|background|combined)\.webp))$/;
 const ANIMATION = /^\/animation\/(\d{5})\.mp4$/;
+const APPROVED_VIDEO_PREFIX = "approved-videos/";
 const OPTION_PAGE = /^\/options\/([A-Za-z0-9][A-Za-z0-9._-]{0,80})$/;
 const ID = /^\d{5}$/;
 const MAX_BATCH = 200;
@@ -50,7 +51,7 @@ async function object(req, env, key, type, additionalHeaders = {}) {
 // Only signed-off clips are uploaded under this key. The password gate
 // applies to both the availability check and every media request.
 async function approvedVideo(req, bucket, id) {
-  const key = `approved-videos/${id}.mp4`;
+  const key = `${APPROVED_VIDEO_PREFIX}${id}.mp4`;
   const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.get("Range") || "");
   const head = req.method === "HEAD";
   const ranged = !head && range && (range[1] || range[2]);
@@ -89,6 +90,20 @@ async function approvedVideo(req, bucket, id) {
   };
   if (bounds) headers["Content-Range"] = `bytes ${bounds.offset}-${bounds.end}/${obj.size}`;
   return new Response(head ? null : obj.body, { status: bounds ? 206 : 200, headers });
+}
+
+async function approvedVideoIds(bucket) {
+  const ids = [];
+  let cursor;
+  do {
+    const page = await bucket.list({ prefix: APPROVED_VIDEO_PREFIX, cursor });
+    for (const { key, size } of page.objects) {
+      const entry = /^(\d{5})\.mp4$/.exec(key.slice(APPROVED_VIDEO_PREFIX.length));
+      if (entry && size > 0) ids.push(entry[1]);
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return ids;
 }
 
 function pngDownload(url, id, kind) {
@@ -135,15 +150,16 @@ async function data(env, name, reviewing) {
   if (!obj) throw new Error("meta/items.json is missing");
   const queries = [UPDATES_SQL, SELECTIONS_SQL];
   if (reviewing) queries.push(VERDICTS_SQL, TRIAGE_SQL);
-  const [items, backgrounds, [u, selections, v, t]] = await Promise.all([
+  const [items, backgrounds, animatedIds, [u, selections, v, t]] = await Promise.all([
     obj.text(), backgroundOptions(env),
+    approvedVideoIds(env.ART).catch(() => null),
     env.DB.batch(queries.map((sql) => env.DB.prepare(sql))),
   ]);
   const selected = Object.fromEntries(selections.results.map((row) => [row.id, row]));
   // A collection can exceed D1's single-value limit; each item's reviewers remain one bounded value.
   const verdicts = (v?.results ?? []).map((r) => `${JSON.stringify(r.id)}:${r.people}`).join(",");
   // Joined as text so that the Worker does not parse 5 MB of JSON on each load.
-  return json(`{"me":${JSON.stringify(name)},"review_enabled":${reviewing},"catalog_version":${JSON.stringify(obj.httpEtag)},"config":${JSON.stringify(config(env))},"items":${items},"verdicts":{${verdicts}},"triage":${t?.results[0].j ?? "{}"},"updates":${u.results[0].j},"background_options":${JSON.stringify(reviewerBackgroundOptions(backgrounds, reviewing ? name : null))},"background_selections":${JSON.stringify(selected)}}`);
+  return json(`{"me":${JSON.stringify(name)},"review_enabled":${reviewing},"catalog_version":${JSON.stringify(obj.httpEtag)},"config":${JSON.stringify(config(env))},"items":${items},"animated_ids":${JSON.stringify(animatedIds)},"verdicts":{${verdicts}},"triage":${t?.results[0].j ?? "{}"},"updates":${u.results[0].j},"background_options":${JSON.stringify(reviewerBackgroundOptions(backgrounds, reviewing ? name : null))},"background_selections":${JSON.stringify(selected)}}`);
 }
 
 async function selectBackground(env, name, batch, catalog, at) {
