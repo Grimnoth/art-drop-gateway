@@ -5,6 +5,7 @@ free GitHub Actions job.
 
 The gallery opens as an art viewer. Use **Traits** to narrow the gallery by character attributes.
 Each value shows how many items match it in the current gallery and with the other selected traits.
+Open an image to see all its traits and tap a trait there to apply it to the gallery.
 To restore review controls, notes, exports, and review writes for the site, set `REVIEW_ENABLED = "true"` in the Worker's `[vars]` and deploy. Previously saved reviews
 remain available in review mode.
 

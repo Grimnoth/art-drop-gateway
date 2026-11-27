@@ -133,6 +133,40 @@ test("viewer trait counts follow the current delivery and other active traits", 
   assert.equal(g.writes.length, 0);
 });
 
+test("viewer details show every trait and tapping one filters the gallery", async () => {
+  const g = gallery({
+    data: { ...deliveryData, review_enabled: false,
+      items: [
+        { ...deliveryData.items[0], traits: { Hat: "Cap", Eyes: "Shark", Skin: "Gray" } },
+        { ...deliveryData.items[1], traits: { Hat: "Crown", Eyes: "Shark", Skin: "Gold" } },
+        { ...deliveryData.items[2], traits: { Hat: "Crown", Eyes: "Shark", Skin: "Gray" } },
+        { id: "00004", upd: deliveryData.items[0].upd },
+      ] },
+    search: "?delivery=delivery-2026-11-21",
+  });
+  await g.run("init()");
+  g.run('setTraits({Eyes:"Shark"});openDetail("00001")');
+  assert.equal(g.node("dtraits").hidden, false);
+  const chips = g.node("dtraitchips").innerHTML;
+  assert.equal((chips.match(/<button/g) || []).length, 3);
+  assert.match(chips, /data-tk="Hat" data-tv="Cap"[^>]*>Hat: Cap<i>1<\/i>/);
+  assert.match(chips, /data-tk="Skin" data-tv="Gray"[^>]*>Skin: Gray<i>1<\/i>/);
+  assert.match(chips, /data-tk="Eyes" data-tv="Shark"[^>]*aria-pressed="true"/);
+
+  const cap = { target: { closest: () => ({ dataset: { tk: "Hat", tv: "Cap" } }) } };
+  g.node("dtraitchips").onclick(cap);
+  assert.equal(g.node("detail").classList.contains("open"), false);
+  assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001");
+  g.run('openDetail("00001")');
+  assert.match(g.node("dtraitchips").innerHTML, /data-tk="Hat" data-tv="Cap"[^>]*aria-pressed="true"/);
+  g.node("dtraitchips").onclick(cap);
+  assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002");
+  g.run('openDetail("00004")');
+  assert.equal(g.node("dtraits").hidden, true);
+  assert.equal(g.node("dtraitchips").innerHTML, "");
+  assert.equal(g.writes.length, 0);
+});
+
 test("the download follows the full-size layer in the artwork detail", () => {
   const g = gallery();
   g.run('openDetail("00001")');

@@ -87,6 +87,7 @@ body.comparison #grid{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
 html:has(#detail.open){overflow:hidden}
 .side{display:flex;flex-direction:column;gap:10px}
 .side h2{margin:0;font-size:20px}
+#dtraits h3{margin:0 0 6px;font-size:14px}
 .meta{color:var(--dim);font-size:13px;word-break:break-word}
 .meta b{color:var(--text);font-weight:500}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
@@ -230,6 +231,10 @@ body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.
   <p id="dfinal" class="meta review-only" hidden></p>
   <span class="meta review-only">Tap the art to zoom to 100%.</span>
   <div class="chips" id="layers"></div>
+  <section id="dtraits" aria-labelledby="dtraits-title" hidden>
+   <h3 id="dtraits-title">Traits</h3>
+   <div class="chips traits" id="dtraitchips"></div>
+  </section>
   <div class="chips review-only" id="reasons"></div>
   <textarea class="review-only" aria-label="Review note" id="note" placeholder="Note for the artist (optional)"></textarea>
   <details id="reviewinfo" class="review-only"><summary>Review history &amp; art details</summary><div class="meta" id="dmeta"></div></details>
@@ -497,18 +502,19 @@ function fillViewerTraits(){
   [...viewerTraitValues.keys()].sort().map(category=>`<option value="${esc(category)}">${esc(category)}</option>`).join("");
  paintTraitValues();
 }
+function viewerTraitCounts(category,values){
+ const inScope=FILTERS[$("filter").value][1],counts=new Map();
+ const otherTraits=Object.entries(TR).filter(([key])=>key!==category);
+ for(const d of items){
+  const value=d.traits?.[category];
+  if(values.has(value)&&inScope(d)&&matchesTraits(d,otherTraits))counts.set(value,(counts.get(value)||0)+1);
+ }
+ return counts;
+}
 function paintTraitValues(){
  const category=$("trait-category").value,values=viewerTraitValues.get(category),field=$("trait-value");
  field.disabled=!values;
- const counts=new Map();
- if(values){
-  const inScope=FILTERS[$("filter").value][1];
-  const otherTraits=Object.entries(TR).filter(([key])=>key!==category);
-  for(const d of items){
-   const value=d.traits?.[category];
-   if(values.has(value)&&inScope(d)&&matchesTraits(d,otherTraits))counts.set(value,(counts.get(value)||0)+1);
-  }
- }
+ const counts=values?viewerTraitCounts(category,values):null;
  field.innerHTML='<option value="">Any value</option>'+
   (values?[...values].sort().map(value=>`<option value="${esc(value)}">${esc(value)} (${(counts.get(value)||0).toLocaleString("en-US")})</option>`).join(""):"");
  field.value=Object.hasOwn(TR,category)?TR[category]:"";
@@ -587,13 +593,24 @@ async function chooseBackground(choice,id=$("detail").dataset.id){
   if($("detail").classList.contains("open")&&$("detail").dataset.id===id)paintDetail();
  }
 }
+function detailTraitButtons(traits,count){
+ return traits.map(([category,value])=>{
+  const active=TR[category]==value;
+  return `<button data-tk="${esc(category)}" data-tv="${esc(value)}" class="${active?"on":""}" aria-pressed="${active}">${esc(category)}: ${esc(value)}<i>${count(category,value).toLocaleString("en-US")}</i></button>`;
+ }).join("");
+}
 function paintDetail(){
  const id=$("detail").dataset.id,d=byId[id];
  const full=fullUrl(d,dLayer);
  $("dimg").src=full;
  $("ddownload").href=full+"?download=1";
  $("layers").innerHTML=["combined","character","background"].map(l=>`<button data-l="${l}" class="${l==dLayer?"on":""}">${l[0].toUpperCase()+l.slice(1)}</button>`).join("");
- if(!REVIEW_ENABLED)return;
+ const traits=Object.entries(d.traits||{});
+ if(!REVIEW_ENABLED){
+  $("dtraits").hidden=!traits.length;
+  $("dtraitchips").innerHTML=detailTraitButtons(traits,(category,value)=>viewerTraitCounts(category,new Set([value])).get(value)||0);
+  return;
+ }
  paintBackground(d);
  $("dfinal").hidden=!d.final_option;
  $("dfinal").textContent=d.final_option?`Final option ${d.final_option.number} · ${d.final_option.label}`:"";
@@ -606,7 +623,7 @@ function paintDetail(){
  const warn=[needsReReview(id)?"Needs re-review. This art changed after it was flagged. Check the new art, then remove or update your flag.":"",UPD[id]?`Updated by the artist in ${UPD[id].tag} (${(UPD[id].kinds||[]).join(", ")}).${v&&v.art_version!==artVersion(reviewUpdate(id))?" Your last review is for an earlier version.":""}`:"",HASCHOSEN&&!d.mint?CFG.others+".":"",d.prov?"Background is provisional, not final approval.":"",d.cleanup?"Effect cleanup: the character differs from the source.":"",(d.clip||[]).length?"Figure reaches the "+d.clip.join(", ")+" edge.":"",d.diff>MISMATCH?`Published combined differs from its layers (${d.diff}).`:"",d.errors?"File error: "+d.errors:""].filter(Boolean);
  $("dmeta").innerHTML=(d.mint?`<p style="color:var(--accent)"><b style="color:inherit">&#9733; ${esc(CFG.chosen)}</b></p>`:"")+(isArtist()?"":`<p><b>Your review:</b> ${v&&v.verdict!="clear"?v.verdict:"not reviewed"}</p>`)+previousReview(id)+others.map(r=>`<p><b>${esc(r.by)}:</b> ${esc(r.verdict)}${r.reasons?.length?" ("+esc(r.reasons.join(", "))+")":""}${r.note?" "+esc(r.note):""}</p>`).join("")+(stOf(id)?`<p><b>Fix list:</b> ${esc(needsReReview(id)?"Needs re-review":stOf(id))}</p>`:"")+warn.map(w=>`<p class="warn">${esc(w)}</p>`).join("")+
   ((d.twins||[]).length?`<p><b>Same traits as:</b> ${d.twins.filter(t=>byId[t]).map(t=>`<a href="#" data-go="${t}" style="color:var(--accent)">${t}</a>`).join(", ")}</p>`:"")+
-  (d.name?`<p><b>${esc(d.name)}</b>${d.animated?" (animated)":""}</p>`:"")+(Object.keys(d.traits||{}).length?`<p style="margin:0 0 4px">Tap a trait to show only ${esc(CFG.nouns)} with it:</p>`:"")+`<div class="chips traits">${Object.entries(d.traits||{}).map(([k,v])=>`<button data-tk="${esc(k)}" data-tv="${esc(v)}" class="${TR[k]==v?"on":""}">${esc(k)}: ${esc(v)}<i>${TCOUNT[k+"\u0000"+v]||0}</i></button>`).join("")}</div>`+(d.amend?`<p><b>Roster change:</b> ${esc(d.amend)}</p>`:"")+
+  (d.name?`<p><b>${esc(d.name)}</b>${d.animated?" (animated)":""}</p>`:"")+(Object.keys(d.traits||{}).length?`<p style="margin:0 0 4px">Tap a trait to show only ${esc(CFG.nouns)} with it:</p>`:"")+`<div class="chips traits">${detailTraitButtons(traits,(category,value)=>TCOUNT[category+"\u0000"+value]||0)}</div>`+(d.amend?`<p><b>Roster change:</b> ${esc(d.amend)}</p>`:"")+
   // Each fact shows only when the data has it.
   `<p>`+[["Delivery note",d.qc],["Size",d.size],["Readability score",d.contrast],["Figure fills",d.coverage==null?null:(d.coverage*100).toFixed(0)+"%"],["Background source",d.src],["Background review",d.scope]].filter(([,x])=>x!=null&&x!=="").map(([k,x])=>`<b>${k}:</b> ${esc(x)}`).join("<br>")+`</p>`;
 }
@@ -760,9 +777,18 @@ $("bchoose-delivered").onclick=()=>chooseBackground("delivered");
 $("stage").onclick=()=>$("stage").classList.toggle("zoom");
 $("layers").onclick=e=>{if(e.target.dataset.l){dLayer=e.target.dataset.l;paintDetail()}};
 $("reasons").onclick=e=>{const r=e.target.dataset.r;if(r){dReasons.has(r)?dReasons.delete(r):dReasons.add(r);paintDetail()}};
-$("dmeta").onclick=e=>{
+function selectDetailTrait(e){
  const t=e.target.closest("[data-tk]");
- if(t){const k=t.dataset.tk,v=t.dataset.tv,next={...TR};next[k]==v?delete next[k]:next[k]=v;close();return setTraits(next)}
+ if(!t)return false;
+ const {tk,tv}=t.dataset;
+ const next={...TR,[tk]:tv};
+ if(TR[tk]==tv)delete next[tk];
+ close();setTraits(next);
+ return true;
+}
+$("dtraitchips").onclick=selectDetailTrait;
+$("dmeta").onclick=e=>{
+ if(selectDetailTrait(e))return;
  const g=e.target.dataset.go;if(g){e.preventDefault();openDetail(g)}
 };
 $("trait-category").onchange=paintTraitValues;
