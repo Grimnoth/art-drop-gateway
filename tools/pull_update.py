@@ -389,6 +389,10 @@ def correction_manifest(source, tag, archive, expected_ids, names, old, work, de
     rows = read_csv(source.fetch(tag, index, work))
     archive_path = fetch_verified(source, tag, archive, work, sums) if index == "File_Index.csv" else None
     indexed = image_correction_rows(rows, archive_path) if archive_path else batch_correction_rows(rows)
+    return sums, write_correction_index(indexed, old, expected_ids, dest), archive_path
+
+
+def write_correction_index(indexed, old, expected_ids, dest):
     assets, members, ids = dict(old), {}, {}
     for id_, kind, path, digest in indexed:
         rel = f"ID{id_}/{id_}__{kind}.png"
@@ -418,7 +422,7 @@ def correction_manifest(source, tag, archive, expected_ids, names, old, work, de
         writer = csv.DictWriter(f, fieldnames=["ID"] + [f"{k}_{field}" for k in KINDS for field in ("relative_path", "sha256")])
         writer.writeheader()
         writer.writerows(items.values())
-    return sums, members, archive_path
+    return members
 
 
 def option_index(rows, expected_ids, expected_options):
@@ -445,27 +449,31 @@ def option_index(rows, expected_ids, expected_options):
     return grouped, digests
 
 
+def option_members(z, digests):
+    """Match the indexed art inside Images/, allowing one enclosing folder."""
+    members, roots = {}, set()
+    for entry in z.infolist():
+        if entry.is_dir():
+            continue
+        parent, _, tail = entry.filename.partition("/")
+        if parent == "Images":
+            root, path = "", entry.filename
+        elif parent not in (".", "..", "") and tail.startswith("Images/"):
+            root, path = parent, tail
+        else:
+            continue
+        if path not in digests or path in members:
+            raise Refuse("the option ZIP contains unexpected or repeated artwork")
+        members[path] = entry
+        roots.add(root)
+    if len(roots) != 1 or members.keys() != digests.keys():
+        raise Refuse("the option ZIP does not contain exactly the indexed artwork in one folder")
+    return members
+
+
 def unpack_options(archive, digests, work):
-    """Extract only indexed art paths inside Images/, allowing one enclosing folder."""
     with zipfile.ZipFile(archive) as z:
-        members, roots = {}, set()
-        for entry in z.infolist():
-            if entry.is_dir():
-                continue
-            parent, _, tail = entry.filename.partition("/")
-            if parent == "Images":
-                root, path = "", entry.filename
-            elif parent not in (".", "..", "") and tail.startswith("Images/"):
-                root, path = parent, tail
-            else:
-                continue
-            if path not in digests or path in members:
-                raise Refuse("the option ZIP contains unexpected or repeated artwork")
-            members[path] = entry
-            roots.add(root)
-        if len(roots) != 1 or members.keys() != digests.keys():
-            raise Refuse("the option ZIP does not contain exactly the indexed artwork in one folder")
-        for path, entry in members.items():
+        for path, entry in option_members(z, digests).items():
             out = work / path
             out.parent.mkdir(parents=True, exist_ok=True)
             with z.open(entry) as source, out.open("wb") as dest:
@@ -488,11 +496,11 @@ def render_options(groups):
         for number, label, prefix in options:
             title = f"Option {number} · {escape(label)}"
             art = f"/o/{prefix}Images/ID{id_}/{id_}"
-            links = " ".join(f'<a href="{art}__{kind}.png">{kind.title()}</a>' for kind in KINDS)
+            links = " ".join(f'<a href="{art}__{kind}.png?download=1" download>{kind.title()}</a>' for kind in KINDS)
             cards.append(
                 f'<figure><a href="{art}__combined.png" aria-label="Full-size combined image, {title}">'
                 f'<img src="/o/{prefix}thumbs/{id_}_combined.webp" loading="lazy" alt="{title}"></a>'
-                f'<figcaption><strong>{title}</strong><nav aria-label="Layers">{links}</nav></figcaption></figure>'
+                f'<figcaption><strong>{title}</strong><nav aria-label="Download PNG"><span>Download PNG</span>{links}</nav></figcaption></figure>'
             )
         sections.append(f'<section id="{id_}"><h2>#{id_}</h2><div class="grid">{"".join(cards)}</div></section>')
     return """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -512,8 +520,7 @@ figcaption{padding:.55rem;font-size:.9rem} nav{display:flex;flex-wrap:wrap;gap:.
 <main>""" + "".join(sections) + "</main></body></html>"
 
 
-def publish_options(a, source, tag, store, work):
-    names = source.assets(tag)
+def load_option_delivery(a, source, tag, names, work):
     mask(*names)
     checksum = f"{a.options}.sha256"
     if not {a.options, a.option_index, checksum}.issubset(names):
@@ -524,7 +531,33 @@ def publish_options(a, source, tag, store, work):
     grouped, digests = option_index(
         read_csv(source.fetch(tag, a.option_index, work)), a.expected_ids, a.expected_options
     )
-    unpack_options(fetch_verified(source, tag, a.options, work, sums), digests, work)
+    archive = fetch_verified(source, tag, a.options, work, sums)
+    return sums, archive, grouped, digests
+
+
+def selected_option_manifest(a, source, tag, names, old, work, dest):
+    try:
+        choices = json.loads(setting("OPTION_SELECTIONS"))
+    except json.JSONDecodeError as exc:
+        raise Refuse("OPTION_SELECTIONS must be a JSON object of IDs and option numbers") from exc
+    if not isinstance(choices, dict) or not choices:
+        raise Refuse("OPTION_SELECTIONS must have at least one selection")
+    sums, archive, grouped, digests = load_option_delivery(a, source, tag, names, work)
+    with zipfile.ZipFile(archive) as z:
+        members = option_members(z, digests)
+    indexed, final = [], {}
+    for id_, number in choices.items():
+        if type(number) is not int or number not in grouped.get(id_, {}):
+            raise Refuse("a final choice does not match an option in this delivery")
+        label, layers = grouped[id_][number]
+        final[id_] = {"tag": tag, "number": number, "label": label}
+        indexed.extend((id_, kind, members[path].filename, digests[path]) for kind, path in layers.items())
+    return sums, write_correction_index(indexed, old, len(choices), dest), archive, final
+
+
+def publish_options(a, source, tag, store, work):
+    sums, archive, grouped, digests = load_option_delivery(a, source, tag, source.assets(tag), work)
+    unpack_options(archive, digests, work)
     print(f"{a.expected_options} options for {a.expected_ids} IDs, {len(digests)} checked layers.", flush=True)
     if not a.apply:
         print("Dry run. No review page was published.")
@@ -672,6 +705,7 @@ def patch_items(by_id, rows, results, changed, prefix, tag, at, *, refresh_field
     for id_, r in results.items():
         kinds = sorted(REL.match(rel)[2] for rel in changed if REL.match(rel)[1] == id_)
         d = by_id[id_]
+        d.pop("final_option", None)
         d["v"] = {**d.get("v", {}), **{k: prefix for k in kinds}}
         # build.py leaves composite_diff empty when the layers cannot be compared with the combined image. Show
         # that as a file error and as a mismatch, not as a perfect match.
@@ -689,13 +723,14 @@ def run(a, store, work):
     mask(tag)
     if not TAG.match(tag):
         raise Refuse(f"bad tag {tag!r}")
-    if getattr(a, "options", None):
+    finalizing = getattr(a, "finalize_options", False)
+    if getattr(a, "options", None) and not finalizing:
         return publish_options(a, source, tag, store, work)
     state, old = load_state(store, work)
     current = state["tag"]
     mask(current)
-    archive = getattr(a, "corrections", None)
-    if archive and current != a.base_tag:
+    archive = a.options if finalizing else getattr(a, "corrections", None)
+    if archive and not finalizing and current != a.base_tag:
         raise Refuse("the live full-delivery baseline does not match the requested baseline")
     if not archive and tag == current:
         print(f"{tag} is the published delivery. Nothing to do.")
@@ -707,7 +742,13 @@ def run(a, store, work):
     names = source.assets(tag)
     mask(*names)
     batch_members = correction_zip = None
-    if archive:
+    final = {}
+    if finalizing:
+        sums, batch_members, correction_zip, final = selected_option_manifest(
+            a, source, tag, names, old, download, new_index
+        )
+        print(f"{len(final)} final options selected.", flush=True)
+    elif archive:
         sums, batch_members, correction_zip = correction_manifest(
             source, tag, archive, a.expected_ids, names, old, download, new_index
         )
@@ -743,13 +784,15 @@ def run(a, store, work):
     if not a.apply:
         print("Dry run. Nothing changed. Add --apply to publish.")
         return 0
-    if archive and not changed:
+    by_id = {d["id"]: d for d in state["items"]}
+    if final.keys() - by_id.keys():
+        raise Refuse("a final choice is not in the gallery catalog")
+    if archive and not changed and all(by_id[id_].get("final_option") == choice for id_, choice in final.items()):
         return 0
     if changed and not zips:
         raise Refuse("files changed, but the release has no image ZIP")
 
     rows = {r["ID"]: r for r in read_csv(one(new_index, ID_MANIFEST))}
-    by_id = {d["id"]: d for d in state["items"]}
     for id_ in ids:
         if id_ not in rows:
             raise Refuse(f"ID {id_} has changed files but is not in the ID manifest")
@@ -858,6 +901,8 @@ def run(a, store, work):
         raise Refuse(f"{len(missing)} changed files are missing or fail their checksum, first: {missing[:5]}")
 
     patch_items(by_id, rows, results, changed, prefix, tag, int(time.time()), refresh_fields=not archive)
+    for id_, choice in final.items():
+        by_id[id_]["final_option"] = choice
     # Keep the upstream tag so the scheduled full-delivery pull does not undo these corrections.
     state.update(tag=current if archive else tag, manifest=manifest)
     path = work / "state.json"
@@ -875,6 +920,8 @@ def run(a, store, work):
         shown = "" if os.environ.get("GITHUB_ACTIONS") == "true" else f": {bad[:20]}"
         print(f"WARNING: {len(bad)} IDs have a combined image that differs from background + character{shown}")
     print(f"Published {tag}: {len(changed)} files in {len(ids)} items. The replaced files stay in the bucket.")
+    if final:
+        print(f"Published {len(final)} final options.")
     return 0
 
 
@@ -889,6 +936,7 @@ def main():
     mode.add_argument("--corrections", metavar="ZIP", help="overlay this corrections-only release asset")
     mode.add_argument("--options", metavar="ZIP", help="publish this options release to a separate review page")
     p.add_argument("--option-index", metavar="CSV", help="required file index for an options release")
+    p.add_argument("--finalize-options", action="store_true", help="publish the options selected in OPTION_SELECTIONS")
     p.add_argument("--base-tag", help="required live full-delivery tag for a corrections overlay")
     p.add_argument("--expected-ids", type=int, help="required number of IDs for a correction or options release")
     p.add_argument("--expected-options", type=int, help="required number of artwork options")
@@ -899,8 +947,8 @@ def main():
                 or not a.expected_ids or a.expected_ids < 1
                 or not a.expected_options or a.expected_options < 1 or a.base_tag is not None):
             p.error("options require an explicit tag, ZIP filename, --option-index and positive ID and option counts")
-    elif a.option_index is not None or a.expected_options is not None:
-        p.error("--option-index and --expected-options are used only with --options")
+    elif a.option_index is not None or a.expected_options is not None or a.finalize_options:
+        p.error("--option-index, --expected-options and --finalize-options are used only with --options")
     if a.corrections:
         if (not a.tag or not a.base_tag or not TAG.fullmatch(a.base_tag) or not a.expected_ids or a.expected_ids < 1
                 or not re.fullmatch(r"[\w.-]+\.zip", a.corrections)):

@@ -25,6 +25,10 @@ on:
         description: "Publish the configured art options for review"
         type: boolean
         default: false
+      finalize_options:
+        description: "Publish reviewed art choices as the default artwork"
+        type: boolean
+        default: false
 concurrency:
   group: pull-art
   cancel-in-progress: false
@@ -40,9 +44,9 @@ jobs:
     timeout-minutes: 300
     steps:
       - name: Check delivery mode
-        if: ${{ inputs.corrections && inputs.options }}
+        if: ${{ (inputs.corrections && (inputs.options || inputs.finalize_options)) || (inputs.options && inputs.finalize_options) }}
         run: |
-          echo "Select either corrections or options."
+          echo "Select one delivery mode."
           exit 1
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -57,7 +61,7 @@ jobs:
           SITE_FIELDS_PY: ${{ secrets.SITE_FIELDS_PY }}
         run: if [ -n "$SITE_FIELDS_PY" ]; then printf '%s\n' "$SITE_FIELDS_PY" > tools/site_fields.py; fi
       - name: Publish changes
-        if: ${{ !inputs.corrections && !inputs.options }}
+        if: ${{ !inputs.corrections && !inputs.options && !inputs.finalize_options }}
         env:
           GH_TOKEN: ${{ secrets.DELIVERY_REPO_TOKEN }}
           DELIVERY_REPO: ${{ secrets.DELIVERY_REPO }}
@@ -82,10 +86,11 @@ jobs:
           python3 -I tools/pull_update.py --repo="$repo" --corrections="$archive" \
             --base-tag="$baseline" --expected-ids="$count" ${{ inputs.dry_run && ' ' || '--apply' }} -- "$tag"
       - name: Publish options
-        if: ${{ inputs.options }}
+        if: ${{ inputs.options || inputs.finalize_options }}
         env:
           GH_TOKEN: ${{ secrets.OPTION_REPO_TOKEN || secrets.DELIVERY_REPO_TOKEN }}
           OPTION_DELIVERY: ${{ secrets.OPTION_DELIVERY }}
+          OPTION_SELECTIONS: ${{ secrets.OPTION_SELECTIONS }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -97,4 +102,5 @@ jobs:
           ids=$(jq -er '.ids | numbers' <<< "$OPTION_DELIVERY")
           options=$(jq -er '.options | numbers' <<< "$OPTION_DELIVERY")
           python3 -I tools/pull_update.py --repo="$repo" --options="$archive" --option-index="$index" \
-            --expected-ids="$ids" --expected-options="$options" ${{ inputs.dry_run && ' ' || '--apply' }} -- "$tag"
+            --expected-ids="$ids" --expected-options="$options" ${{ inputs.finalize_options && '--finalize-options' || ' ' }} \
+            ${{ inputs.dry_run && ' ' || '--apply' }} -- "$tag"

@@ -61,6 +61,15 @@ test("the delivery filter shows only the latest batch", async () => {
   assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002");
 });
 
+test("the download follows the full-size layer in the artwork detail", () => {
+  const g = gallery();
+  g.run('openDetail("00001")');
+  assert.equal(g.node("ddownload").href, "/full/00001/combined.png?download=1");
+  g.run('byId["00001"].v = { character: "r/0123456789abcdef/" }');
+  g.node("layers").onclick({ target: { dataset: { l: "character" } } });
+  assert.equal(g.node("ddownload").href, "/o/r/0123456789abcdef/Images/ID00001/00001__character.png?download=1");
+});
+
 test("the vampire review includes unchanged art and can choose the matched prior artwork in detail", async () => {
   const prefix = "r/0123456789abcdef/";
   const previous = { v: { character: "", background: "", combined: "" }, tv: "" };

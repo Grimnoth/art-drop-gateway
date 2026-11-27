@@ -146,6 +146,14 @@ Dispatch **Pull the artist's art** with **Publish the configured art options for
 Select **Only report what changed** to check the release and report its counts before publishing.
 The Worker must be deployed with the options route before the page can be opened.
 
+To publish approved choices as the default art, set the `OPTION_SELECTIONS` Actions secret to a
+JSON object mapping IDs to their approved option numbers. Dispatch with **Publish reviewed art
+choices as the default artwork**. Only selected IDs are overlaid on the existing catalog. The
+same delivery remains available for comparing the original options.
+
+In the gallery detail, **Download full-resolution PNG** saves the current layer. Background
+comparisons and the options page also link to the original PNGs. Downloads use the gallery login.
+
 ## Project fields
 
 The gallery shows extra facts and filters when items carry them: a delivery note, a chosen set, a provisional
