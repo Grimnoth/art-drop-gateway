@@ -184,6 +184,22 @@ python3 -I tools/pull_update.py
 
 That reports what changed and changes nothing. Add `--apply` to publish, or name a tag to use another release.
 
+## Approved living photos
+
+After the user signs off on a specific cut, upload only that final MP4 to the
+review site's private art bucket as `approved-videos/NNNNN.mp4`, using the
+five-digit pirate ID. From the configured review installation, substitute its
+bucket name, the approved ID and the exact final file:
+
+```bash
+wrangler r2 object put <bucket>/approved-videos/<id>.mp4 \
+  --remote --content-type video/mp4 --file <approved.mp4>
+```
+
+Open that pirate in the viewer to verify the still and the looping video together.
+Clips outside this approved location stay in their draft review workflow. An
+artwork update and a video approval are independent.
+
 ## Tests
 
 ```bash

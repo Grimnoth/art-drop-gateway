@@ -9,6 +9,7 @@ const THUMB = /^\/thumbs\/(\d{5})_(character|background|combined)\.webp$/;
 const FULL = /^\/full\/(\d{5})\/(character|background|combined)\.png$/;
 // Files that pull_update.py uploaded for one release. They are never overwritten.
 const VERSIONED = /^\/o\/(r\/[0-9a-f]{16}\/(?:Images\/ID(\d{5})\/\2__(character|background|combined)\.png|thumbs\/\d{5}_(?:character|background|combined)\.webp))$/;
+const ANIMATION = /^\/animation\/(\d{5})\.mp4$/;
 const OPTION_PAGE = /^\/options\/([A-Za-z0-9][A-Za-z0-9._-]{0,80})$/;
 const ID = /^\d{5}$/;
 const MAX_BATCH = 200;
@@ -44,6 +45,50 @@ async function object(req, env, key, type, additionalHeaders = {}) {
   if (!obj) return text("not found", 404);
   const headers = { "Content-Type": type, "Cache-Control": "private, no-cache", ETag: obj.httpEtag, "X-Robots-Tag": "noindex", ...additionalHeaders };
   return new Response(obj.body ?? null, { status: obj.body ? 200 : 304, headers });
+}
+
+// Only signed-off clips are uploaded under this key. The password gate
+// applies to both the availability check and every media request.
+async function approvedVideo(req, bucket, id) {
+  const key = `approved-videos/${id}.mp4`;
+  const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.get("Range") || "");
+  const head = req.method === "HEAD";
+  const ranged = !head && range && (range[1] || range[2]);
+  let obj = head || ranged ? await bucket.head(key) : await bucket.get(key);
+  if (!obj?.size) return text("not found", 404);
+
+  let bounds;
+  const ifRange = req.headers.get("If-Range");
+  if (ranged && (!ifRange || ifRange === obj.httpEtag)) {
+    const offset = range[1] ? Number(range[1]) : Math.max(0, obj.size - Number(range[2]));
+    const end = range[1] && range[2] ? Math.min(Number(range[2]), obj.size - 1) : obj.size - 1;
+    if (offset >= obj.size || end < offset) {
+      return text("range not satisfiable", 416, { "Content-Range": `bytes */${obj.size}`, "Accept-Ranges": "bytes" });
+    }
+    const part = await bucket.get(key, {
+      range: { offset, length: end - offset + 1 },
+      onlyIf: new Headers({ "If-Match": obj.httpEtag }),
+    });
+    if (part?.body) {
+      obj = part;
+      bounds = { offset, end };
+    }
+  }
+  // If the approved file was replaced between the metadata and ranged read,
+  // send the full current file so a player cannot join two different versions.
+  if (!head && !obj.body) obj = await bucket.get(key);
+  if (!obj?.size) return text("not found", 404);
+  const headers = {
+    "Content-Type": "video/mp4",
+    "Content-Length": String(bounds ? bounds.end - bounds.offset + 1 : obj.size),
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "private, no-store",
+    "X-Content-Type-Options": "nosniff",
+    "X-Robots-Tag": "noindex",
+    ETag: obj.httpEtag,
+  };
+  if (bounds) headers["Content-Range"] = `bytes ${bounds.offset}-${bounds.end}/${obj.size}`;
+  return new Response(head ? null : obj.body, { status: bounds ? 206 : 200, headers });
 }
 
 function pngDownload(url, id, kind) {
@@ -207,6 +252,10 @@ export default {
       const reviewing = env.REVIEW_ENABLED === true || env.REVIEW_ENABLED === "true";
       if (req.method === "POST" && ["/verdict", "/triage", "/background"].includes(path)) {
         return reviewing ? await save(req, env, path, name) : text("Review mode is disabled.", 403);
+      }
+      const video = ANIMATION.exec(path);
+      if (video && (req.method === "GET" || req.method === "HEAD")) {
+        return await approvedVideo(req, env.ART, video[1]);
       }
       if (req.method !== "GET") return text("not found", 404);
       if (path === "/") {
