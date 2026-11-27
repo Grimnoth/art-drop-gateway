@@ -88,7 +88,7 @@ test("viewer mode shows art and IDs, keeps direct delivery and layer navigation,
   assert.equal(g.writes.length, 0);
 });
 
-test("viewer trait controls stack filters within the current delivery and can clear them", async () => {
+test("viewer trait counts follow the current delivery and other active traits", async () => {
   const g = gallery({
     data: { ...deliveryData, review_enabled: false,
       items: [
@@ -110,9 +110,15 @@ test("viewer trait controls stack filters within the current delivery and can cl
     field.onchange();
   };
   select("trait-category", "Hat");
-  assert.match(g.node("trait-value").innerHTML, /Cap/);
+  assert.match(g.node("trait-value").innerHTML, /value="Cap">Cap \(2\)<\/option>/);
+  assert.match(g.node("trait-value").innerHTML, /value="Crown">Crown \(1\)<\/option>/);
   select("trait-value", "Cap");
   assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002");
+  select("trait-category", "Eyes");
+  assert.match(g.node("trait-value").innerHTML, /value="Shark">Shark \(1\)<\/option>/);
+  select("trait-value", "Gold");
+  select("trait-category", "Hat");
+  assert.match(g.node("trait-value").innerHTML, /value="Crown">Crown \(0\)<\/option>/);
   select("trait-category", "Eyes");
   select("trait-value", "Shark");
   assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001");
@@ -121,6 +127,7 @@ test("viewer trait controls stack filters within the current delivery and can cl
 
   g.node("tchips").onclick({ target: { closest: () => ({ dataset: { k: "Hat" } }) } });
   assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00004");
+  assert.match(g.node("trait-value").innerHTML, /value="Shark">Shark \(2\)<\/option>/);
   g.node("tchips").onclick({ target: { closest: () => ({ dataset: { all: "1" } }) } });
   assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002,00004");
   assert.equal(g.writes.length, 0);

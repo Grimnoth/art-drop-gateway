@@ -369,10 +369,11 @@ async function setV(id,verdict,reasons=[],note=""){
  try{await post([rec]);if(!backgroundQueue){fillFilters();compute();render()}return true}
  catch{if(prev)ALL[id][ME]=prev;else delete ALL[id][ME];repaint();return false}
 }
+const matchesTraits=(d,traits)=>traits.every(([k,v])=>d.traits?.[k]==v);
 function compute(){
  const f=FILTERS[$("filter").value][1],s=$("sort").value,ty=$("type").value;
  const tr=Object.entries(TR);
- list=items.filter(d=>f(d)&&(!ty||d.type==ty)&&tr.every(([k,v])=>d.traits?.[k]==v));
+ list=items.filter(d=>f(d)&&(!ty||d.type==ty)&&matchesTraits(d,tr));
  if(s=="shuffle")list.sort((a,b)=>hash(a.id)-hash(b.id));
  if(s=="contrast")list.sort((a,b)=>a.contrast-b.contrast);
  if(s=="coverage")list.sort((a,b)=>a.coverage-b.coverage);
@@ -499,8 +500,17 @@ function fillViewerTraits(){
 function paintTraitValues(){
  const category=$("trait-category").value,values=viewerTraitValues.get(category),field=$("trait-value");
  field.disabled=!values;
+ const counts=new Map();
+ if(values){
+  const inScope=FILTERS[$("filter").value][1];
+  const otherTraits=Object.entries(TR).filter(([key])=>key!==category);
+  for(const d of items){
+   const value=d.traits?.[category];
+   if(values.has(value)&&inScope(d)&&matchesTraits(d,otherTraits))counts.set(value,(counts.get(value)||0)+1);
+  }
+ }
  field.innerHTML='<option value="">Any value</option>'+
-  (values?[...values].sort().map(value=>`<option value="${esc(value)}">${esc(value)}</option>`).join(""):"");
+  (values?[...values].sort().map(value=>`<option value="${esc(value)}">${esc(value)} (${(counts.get(value)||0).toLocaleString("en-US")})</option>`).join(""):"");
  field.value=Object.hasOwn(TR,category)?TR[category]:"";
 }
 // Trait chips under the header. Each removes its trait; several traits must all match.
