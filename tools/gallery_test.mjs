@@ -131,49 +131,52 @@ test("viewer mode shows art and IDs, keeps direct delivery and layer navigation,
   assert.equal(g.writes.length, 0);
 });
 
-test("viewer trait counts follow the current delivery and other active traits", async () => {
+test("the trait sidebar opens Character Type and shows counts as filters combine", async () => {
   const g = gallery({
     data: { ...deliveryData, review_enabled: false,
       items: [
-        { ...deliveryData.items[0], traits: { Hat: "Cap", Eyes: "Shark" } },
-        { ...deliveryData.items[1], traits: { Hat: "Cap", Eyes: "Gold" } },
-        { ...deliveryData.items[2], traits: { Hat: "Crown", Eyes: "Shark" } },
-        { id: "00004", traits: { Hat: "Crown", Eyes: "Shark" }, upd: deliveryData.items[0].upd },
+        { ...deliveryData.items[0], traits: { "Character Type": "Berserker Male", Eyes: "Red" } },
+        { ...deliveryData.items[1], traits: { "Character Type": "Berserker Male", Eyes: "Gold" } },
+        { ...deliveryData.items[2], traits: { "Character Type": "Druid Male", Eyes: "Red" } },
+        { id: "00004", traits: { "Character Type": "Druid Male", Eyes: "Red" }, upd: deliveryData.items[0].upd },
       ] },
     search: "?delivery=delivery-2026-11-21",
   });
   await g.run("init()");
   assert.equal(g.node("trait-filters").hidden, false);
-  assert.match(g.node("trait-category").innerHTML, /Eyes/);
-  assert.match(g.node("trait-category").innerHTML, /Hat/);
+  assert.equal(g.node("trait-filters").open, true);
+  const groups = () => g.node("trait-groups").innerHTML;
+  const counts = category => g.node(category === "Character Type" ? "trait-values-0" : "trait-values-1").innerHTML;
+  assert.match(groups(), /<details[^>]* open><summary>Character Type<\/summary>/);
+  assert.match(groups(), /<summary>Eyes<\/summary>/);
+  assert.match(counts("Character Type"), /Berserker Male<\/span><span[^>]*>2<\/span>/);
+  assert.match(counts("Character Type"), /Druid Male<\/span><span[^>]*>1<\/span>/);
 
-  const select = (id, value) => {
-    const field = g.node(id);
-    field.value = value;
-    field.onchange();
-  };
-  select("trait-category", "Hat");
-  assert.match(g.node("trait-value").innerHTML, /value="Cap">Cap \(2\)<\/option>/);
-  assert.match(g.node("trait-value").innerHTML, /value="Crown">Crown \(1\)<\/option>/);
-  select("trait-value", "Cap");
+  const select = (tk, tv) => g.node("trait-groups").onclick({
+    target: { closest: () => ({ dataset: { tk, tv } }) },
+  });
+  select("Character Type", "Berserker Male");
   assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002");
-  select("trait-category", "Eyes");
-  assert.match(g.node("trait-value").innerHTML, /value="Shark">Shark \(1\)<\/option>/);
-  select("trait-value", "Gold");
-  select("trait-category", "Hat");
-  assert.match(g.node("trait-value").innerHTML, /value="Crown">Crown \(0\)<\/option>/);
-  select("trait-category", "Eyes");
-  select("trait-value", "Shark");
+  assert.match(counts("Character Type"), /data-tv="Berserker Male"[^>]*aria-pressed="true"/);
+  assert.match(counts("Eyes"), /Red<\/span><span[^>]*>1<\/span>/);
+  select("Eyes", "Gold");
+  assert.match(counts("Character Type"), /Druid Male<\/span><span[^>]*>0<\/span>/);
+  select("Eyes", "Red");
   assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001");
-  assert.match(g.node("tchips").innerHTML, /Hat: Cap/);
-  assert.match(g.node("tchips").innerHTML, /Eyes: Shark/);
+  assert.match(g.node("tchips").innerHTML, /Character Type: Berserker Male/);
+  assert.match(g.node("tchips").innerHTML, /Eyes: Red/);
 
-  g.node("tchips").onclick({ target: { closest: () => ({ dataset: { k: "Hat" } }) } });
+  g.node("tchips").onclick({ target: { closest: () => ({ dataset: { k: "Character Type" } }) } });
   assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00004");
-  assert.match(g.node("trait-value").innerHTML, /value="Shark">Shark \(2\)<\/option>/);
-  g.node("tchips").onclick({ target: { closest: () => ({ dataset: { all: "1" } }) } });
+  assert.match(counts("Eyes"), /Red<\/span><span[^>]*>2<\/span>/);
+  select("Eyes", "Red");
   assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002,00004");
   assert.equal(g.writes.length, 0);
+});
+
+test("the detail names the still and living photo with matching headings", () => {
+  assert.match(html, /<section id="dstill" aria-labelledby="dstill-title">\s*<h3 id="dstill-title">Still photo<\/h3>\s*<div id="stage">/);
+  assert.match(html, /<section id="danimation" aria-labelledby="danimation-title" hidden>\s*<h3 id="danimation-title">Living photo<\/h3>/);
 });
 
 test("viewer details show every trait and tapping one filters the gallery", async () => {
