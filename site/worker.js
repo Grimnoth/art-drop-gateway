@@ -9,6 +9,7 @@ const THUMB = /^\/thumbs\/(\d{5})_(character|background|combined)\.webp$/;
 const FULL = /^\/full\/(\d{5})\/(character|background|combined)\.png$/;
 // Files that pull_update.py uploaded for one release. They are never overwritten.
 const VERSIONED = /^\/o\/(r\/[0-9a-f]{16}\/(?:Images\/ID(\d{5})\/\2__(?:character|background|combined)\.png|thumbs\/\d{5}_(?:character|background|combined)\.webp))$/;
+const OPTION_PAGE = /^\/options\/([A-Za-z0-9][A-Za-z0-9._-]{0,80})$/;
 const ID = /^\d{5}$/;
 const MAX_BATCH = 200;
 
@@ -38,10 +39,10 @@ const json = (body, status = 200) => text(body, status, { "Content-Type": "appli
 
 // no-cache makes the browser come back through the login check on each view.
 // An unchanged image costs a 304, so the grid stays fast and a wrong password never sees art.
-async function object(req, env, key, type) {
+async function object(req, env, key, type, additionalHeaders = {}) {
   const obj = await env.ART.get(key, { onlyIf: req.headers });
   if (!obj) return text("not found", 404);
-  const headers = { "Content-Type": type, "Cache-Control": "private, no-cache", ETag: obj.httpEtag, "X-Robots-Tag": "noindex" };
+  const headers = { "Content-Type": type, "Cache-Control": "private, no-cache", ETag: obj.httpEtag, "X-Robots-Tag": "noindex", ...additionalHeaders };
   return new Response(obj.body ?? null, { status: obj.body ? 200 : 304, headers });
 }
 
@@ -209,6 +210,12 @@ export default {
       if (path === "/flagged.csv") return await exportCsv(env, false);
       if (path === "/artist.csv") return await exportCsv(env, true);
       let m;
+      if ((m = OPTION_PAGE.exec(path))) {
+        return await object(req, env, `meta/option-deliveries/${m[1]}.html`, "text/html; charset=utf-8", {
+          "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+          "X-Content-Type-Options": "nosniff",
+        });
+      }
       if ((m = THUMB.exec(path))) return await object(req, env, `thumbs/${m[1]}_${m[2]}.webp`, "image/webp");
       if ((m = FULL.exec(path))) return await object(req, env, `Images/ID${m[1]}/${m[1]}__${m[2]}.png`, "image/png");
       if ((m = VERSIONED.exec(path))) return await object(req, env, m[1], m[1].endsWith(".png") ? "image/png" : "image/webp");

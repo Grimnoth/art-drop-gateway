@@ -32,11 +32,14 @@ wr("d1", "migrations", "apply", "DB", "--local");
 wr("r2", "object", "put", "art-drop-gateway/meta/items.json", "--local", "--file", items);
 // Stand-in art, because the real art lives only in R2. The Worker serves bytes by path and never decodes them.
 const fakeThumb = join(state, "thumb.webp"), fakeFull = join(state, "full.png");
+const optionsPage = join(state, "options.html");
+writeFileSync(optionsPage, "<!doctype html><title>Synthetic art options</title>");
 writeFileSync(fakeThumb, randomBytes(4000));
 writeFileSync(fakeFull, randomBytes(200000));
 wr("r2", "object", "put", "art-drop-gateway/thumbs/00001_combined.webp", "--local", "--file", fakeThumb);
 wr("r2", "object", "put", "art-drop-gateway/Images/ID00001/00001__combined.png", "--local", "--file", fakeFull);
 const V = "r/0123456789abcdef";
+wr("r2", "object", "put", "art-drop-gateway/meta/option-deliveries/synthetic-release.html", "--local", "--file", optionsPage);
 wr("r2", "object", "put", `art-drop-gateway/${V}/Images/ID00001/00001__character.png`, "--local", "--file", fakeFull);
 wr("r2", "object", "put", `art-drop-gateway/${V}/thumbs/00001_character.webp`, "--local", "--file", fakeThumb);
 const dev = spawn(W, ["dev", ...CONFIG, "--port", "8799", "--ip", "127.0.0.1", "--persist-to", state], { stdio: "ignore" });
@@ -75,6 +78,17 @@ try {
   await test("the login box is requested", async () => assert.match((await get("/")).headers.get("www-authenticate"), /^Basic realm=/));
 
   const ada = basic("ada", PW), max = basic("Max", PW);
+  await test("a release options page is available only behind the password gate", async () => {
+    const path = "/options/synthetic-release";
+    assert.equal((await get(path)).status, 401);
+    assert.equal((await get(path, basic("Ada", "wrong"))).status, 401);
+    const page = await get(path, ada);
+    assert.equal(page.status, 200);
+    assert.match(page.headers.get("content-type"), /^text\/html/);
+    assert.match(page.headers.get("content-security-policy"), /default-src 'none'/);
+    assert.match(await page.text(), /Synthetic art options/);
+    assert.equal((await get("/options/unknown", ada)).status, 404);
+  });
   await test("page loads", async () => { const r = await get("/", ada); assert.equal(r.status, 200); assert.match(await r.text(), /Art Review/); });
   await test("the gallery's shared review-state module loads behind the same password gate", async () => {
     const r = await get("/review-state.mjs", ada);

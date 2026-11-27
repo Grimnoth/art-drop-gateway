@@ -132,6 +132,20 @@ artist's art** with **Overlay the configured correction delivery**. Select **Onl
 for a preview without publishing. For the layered `File_Index.csv` format, the runner downloads the
 ZIP during preview to check and hash the layers.
 
+An options delivery puts the art on a password-protected page at `/options/<release tag>`.
+The page groups alternatives by ID and opens each option's character, background and combined image at full size.
+The importer checks the ZIP and all indexed layers, then publishes the page after its images and thumbnails.
+The gallery catalog and review records are independent of the options page.
+
+The options ZIP uses `Images/nnnnn/Option_XX/nnnnn__<kind>.png` and a sidecar named
+`<ZIP filename>.sha256`. The release attaches a CSV with `id`, `option`, `label`, `layer`, `path`
+and `sha256` columns, one row per layer. Files outside `Images/` are reference material.
+Set the `OPTION_DELIVERY` Actions secret to a JSON object with `repo`, `tag`, `archive`, `index`,
+`ids` and `options`. Set `OPTION_REPO_TOKEN` when the regular token lacks access.
+Dispatch **Pull the artist's art** with **Publish the configured art options for review**.
+Select **Only report what changed** to check the release and report its counts before publishing.
+The Worker must be deployed with the options route before the page can be opened.
+
 ## Project fields
 
 The gallery shows extra facts and filters when items carry them: a delivery note, a chosen set, a provisional

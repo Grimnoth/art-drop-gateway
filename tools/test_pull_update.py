@@ -4,7 +4,7 @@ Touches no real art, no live site and no GitHub.
 
 Run: python3 -I tools/test_pull_update.py
 """
-import csv, hashlib, io, json, os, subprocess, sys, tempfile, zipfile
+import csv, hashlib, io, json, os, re, subprocess, sys, tempfile, zipfile
 from pathlib import Path
 
 from PIL import Image
@@ -867,6 +867,79 @@ def _(t):
         r = tool(store, src, *correction_args(), "--apply", tag="correction")
         assert r.returncode == 2 and "REFUSED" in r.stderr, r.stderr + r.stdout
         assert shown(store) == before
+
+
+def make_options_release(base, *, defect=""):
+    source = base / "options-release"
+    source.mkdir()
+    archive = source / "Options.zip"
+    options = {("00001", "1"): triplet(211), ("00001", "2"): triplet(212), ("00002", "1"): triplet(213)}
+    with (source / "option_index.csv").open("w", encoding="utf-8-sig", newline="") as f, zipfile.ZipFile(archive, "w") as z:
+        rows = csv.writer(f)
+        rows.writerow(["id", "option", "label", "layer", "path", "sha256"])
+        for (id_, number), layers in options.items():
+            for kind, data in layers.items():
+                path = f"Images/{id_}/Option_{int(number):02}/{id_}__{kind}.png"
+                if defect == "missing" and (id_, number, kind) == ("00002", "1", "background"):
+                    continue
+                digest = hashlib.sha256(data).hexdigest()
+                if defect == "checksum" and (id_, number, kind) == ("00002", "1", "combined"):
+                    digest = "0" * 64
+                rows.writerow([id_, number, "Cliff & <script>", kind, path, digest])
+                z.writestr("SenderFolder/" + path, data)
+        z.writestr("SenderFolder/Before/00001__combined.png", triplet(9)["combined"])
+        if defect == "extra":
+            z.writestr("SenderFolder/Images/00003/Option_01/00003__combined.png", triplet(10)["combined"])
+    (source / "Options.zip.sha256").write_text(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  Options.zip\n")
+    return source, options
+
+
+OPTIONS_ARGS = ("--options", "Options.zip", "--option-index", "option_index.csv",
+                "--expected-ids", "2", "--expected-options", "3")
+
+
+@test("an options delivery publishes each triplet and thumbnail without choosing an option or editing the catalog")
+def _(t):
+    store, _ = make_store(t)
+    source, options = make_options_release(t)
+    before = files(store)
+    preview = tool(store, source, *OPTIONS_ARGS, tag="options")
+    assert preview.returncode == 0 and "3 options for 2 IDs" in preview.stdout, preview.stderr + preview.stdout
+    assert files(store) == before
+
+    result = tool(store, source, *OPTIONS_ARGS, "--apply", tag="options")
+    assert result.returncode == 0, result.stderr + result.stdout
+    page = (store / "meta/option-deliveries/options.html").read_text()
+    assert "Cliff &amp; &lt;script&gt;" in page and "<script>" not in page
+    links = set(re.findall(r'="/o/(r/[^"]+)"', page))
+    originals = [p for p in links if p.endswith(".png")]
+    thumbs = [p for p in links if p.endswith(".webp")]
+    assert len(originals) == 9 and len(thumbs) == 3
+    assert sorted((store / p).read_bytes() for p in originals) == sorted(b for option in options.values() for b in option.values())
+    assert all((store / p).is_file() for p in thumbs)
+    assert all((store / p).read_bytes() == data for p, data in before.items())
+    published = files(store)
+    assert set(published) - set(before) == links | {"meta/option-deliveries/options.html"}
+    assert tool(store, source, *OPTIONS_ARGS, "--apply", tag="options").returncode == 0
+    assert files(store) == published
+
+
+@test("invalid options are refused before uploads, and an interrupted upload leaves no review page")
+def _(t):
+    store, _ = make_store(t)
+    before = files(store)
+    for defect in ("missing", "checksum", "extra"):
+        fixture = t / defect
+        fixture.mkdir()
+        source, _ = make_options_release(fixture, defect=defect)
+        result = tool(store, source, *OPTIONS_ARGS, "--apply", tag="options")
+        assert result.returncode == 2 and "REFUSED" in result.stderr, result.stderr + result.stdout
+        assert files(store) == before
+    source, _ = make_options_release(t)
+    result = tool(store, source, *OPTIONS_ARGS, "--apply", tag="options", env={"GATEWAY_FAIL_AFTER": "4"})
+    assert result.returncode == 3, result.stderr + result.stdout
+    assert not (store / "meta/option-deliveries/options.html").exists()
+    assert all((store / p).read_bytes() == data for p, data in before.items())
 
 
 print(f"{failures} FAILED" if failures else "all passed")

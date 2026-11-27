@@ -22,6 +22,7 @@ The release needs one SHA256SUMS*.txt, an index ZIP with a complete manifest, an
 Nothing is uploaded until every changed file passed its checksum and was measured.
 """
 import argparse, csv, functools, hashlib, importlib.util, json, os, re, shutil, subprocess, sys, tempfile, time, zipfile
+from html import escape
 from pathlib import Path
 
 from PIL import Image
@@ -43,7 +44,8 @@ PROGRESS = "meta/progress.txt"
 MIN_FREE = int(os.environ.get("GATEWAY_MIN_FREE", str(512 << 20)))
 MISMATCH = 3  # the same limit as the gallery's "Combined differs from its layers" filter
 UNMEASURED = 255.0  # the largest possible difference, so the gallery lists the item under that filter
-TYPES = {".png": "image/png", ".webp": "image/webp", ".json": "application/json", ".csv": "text/csv", ".txt": "text/plain"}
+TYPES = {".png": "image/png", ".webp": "image/webp", ".json": "application/json", ".csv": "text/csv",
+         ".txt": "text/plain", ".html": "text/html; charset=utf-8"}
 
 
 class Refuse(Exception):
@@ -419,6 +421,138 @@ def correction_manifest(source, tag, archive, expected_ids, names, old, work, de
     return sums, members, archive_path
 
 
+def option_index(rows, expected_ids, expected_options):
+    grouped, digests = {}, {}
+    for row in rows:
+        id_, number, label, kind, path, digest = (
+            row.get(key) or "" for key in ("id", "option", "label", "layer", "path", "sha256")
+        )
+        if (not re.fullmatch(r"[0-9]{5}", id_) or not re.fullmatch(r"[1-9][0-9]?", number)
+                or kind not in KINDS or not label.strip() or not HEX64.fullmatch(digest)):
+            raise Refuse("invalid identity, label, layer or checksum in the option index")
+        directory = f"Images/{id_}/Option_{int(number):02}"
+        if path != f"{directory}/{id_}__{kind}.png" or path in digests:
+            raise Refuse("invalid or repeated path in the option index")
+        option = grouped.setdefault(id_, {}).setdefault(int(number), (label, {}))
+        if option[0] != label:
+            raise Refuse("layers of an option must share the same label")
+        option[1][kind] = path
+        digests[path] = digest
+    if len(grouped) != expected_ids or sum(map(len, grouped.values())) != expected_options:
+        raise Refuse("the option index does not match the expected ID and option counts")
+    if any(layers.keys() != set(KINDS) for options in grouped.values() for _, layers in options.values()):
+        raise Refuse("each option must contain a character, background and combined layer")
+    return grouped, digests
+
+
+def unpack_options(archive, digests, work):
+    """Extract only indexed art paths inside Images/, allowing one enclosing folder."""
+    with zipfile.ZipFile(archive) as z:
+        members, roots = {}, set()
+        for entry in z.infolist():
+            if entry.is_dir():
+                continue
+            parent, _, tail = entry.filename.partition("/")
+            if parent == "Images":
+                root, path = "", entry.filename
+            elif parent not in (".", "..", "") and tail.startswith("Images/"):
+                root, path = parent, tail
+            else:
+                continue
+            if path not in digests or path in members:
+                raise Refuse("the option ZIP contains unexpected or repeated artwork")
+            members[path] = entry
+            roots.add(root)
+        if len(roots) != 1 or members.keys() != digests.keys():
+            raise Refuse("the option ZIP does not contain exactly the indexed artwork in one folder")
+        for path, entry in members.items():
+            out = work / path
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with z.open(entry) as source, out.open("wb") as dest:
+                shutil.copyfileobj(source, dest, 1 << 20)
+            if sha(out) != digests[path]:
+                raise Refuse("an option layer does not match its indexed checksum")
+            try:
+                with Image.open(out) as image:
+                    if image.format != "PNG":
+                        raise Refuse("an option layer is not a PNG")
+                    image.verify()
+            except (OSError, SyntaxError) as exc:
+                raise Refuse("an option layer is not a readable PNG") from exc
+
+
+def render_options(groups):
+    sections = []
+    for id_, options in groups.items():
+        cards = []
+        for number, label, prefix in options:
+            title = f"Option {number} · {escape(label)}"
+            art = f"/o/{prefix}Images/ID{id_}/{id_}"
+            links = " ".join(f'<a href="{art}__{kind}.png">{kind.title()}</a>' for kind in KINDS)
+            cards.append(
+                f'<figure><a href="{art}__combined.png" aria-label="Full-size combined image, {title}">'
+                f'<img src="/o/{prefix}thumbs/{id_}_combined.webp" loading="lazy" alt="{title}"></a>'
+                f'<figcaption><strong>{title}</strong><nav aria-label="Layers">{links}</nav></figcaption></figure>'
+            )
+        sections.append(f'<section id="{id_}"><h2>#{id_}</h2><div class="grid">{"".join(cards)}</div></section>')
+    return """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Art delivery options</title>
+<style>
+:root{color-scheme:dark;background:#151819;color:#f4f4f1;font:16px/1.4 system-ui,sans-serif}
+body{max-width:74rem;margin:auto;padding:1rem 1rem 3rem}
+a{color:#b1d8ee;text-underline-offset:.16em} a:focus-visible{outline:2px solid #b1d8ee;outline-offset:3px}
+h1{font-size:clamp(1.65rem,4vw,2.5rem);margin:.6rem 0 1.25rem} h2{font-size:1.2rem;margin:0 0 .6rem}
+section{border-top:1px solid #444;padding:1.25rem 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,9rem),1fr));gap:.75rem}
+figure{margin:0;overflow:hidden;background:#222628;border:1px solid #414749;border-radius:.55rem}
+img{display:block;width:100%;aspect-ratio:1;object-fit:contain;background:#101213}
+figcaption{padding:.55rem;font-size:.9rem} nav{display:flex;flex-wrap:wrap;gap:.2rem .65rem;margin-top:.45rem}
+</style></head><body><header><a href="/">Back to art review</a><h1>Art delivery options</h1></header>
+<main>""" + "".join(sections) + "</main></body></html>"
+
+
+def publish_options(a, source, tag, store, work):
+    names = source.assets(tag)
+    mask(*names)
+    checksum = f"{a.options}.sha256"
+    if not {a.options, a.option_index, checksum}.issubset(names):
+        raise Refuse("the options release needs the ZIP, its SHA256 sidecar and the option index")
+    sums = read_sums(source.fetch(tag, checksum, work))
+    if set(sums) != {a.options}:
+        raise Refuse("the option checksum file must name only the selected ZIP")
+    grouped, digests = option_index(
+        read_csv(source.fetch(tag, a.option_index, work)), a.expected_ids, a.expected_options
+    )
+    unpack_options(fetch_verified(source, tag, a.options, work, sums), digests, work)
+    print(f"{a.expected_options} options for {a.expected_ids} IDs, {len(digests)} checked layers.", flush=True)
+    if not a.apply:
+        print("Dry run. No review page was published.")
+        return 0
+
+    groups, uploads = {}, []
+    for id_, options in grouped.items():
+        groups[id_] = []
+        for number, (label, layers) in sorted(options.items()):
+            key = hashlib.sha256(f"options:{sums[a.options]}:{id_}:{number}".encode()).hexdigest()[:16]
+            prefix = f"r/{key}/"
+            groups[id_].append((number, label, prefix))
+            for kind, path in layers.items():
+                uploads.append((f"{prefix}Images/ID{id_}/{id_}__{kind}.png", work / path))
+            combined = work / layers["combined"]
+            thumb = combined.with_suffix(".webp")
+            with Image.open(combined) as image:
+                image.thumbnail((360, 360), Image.Resampling.LANCZOS)
+                image.save(thumb, "WEBP", quality=82, method=4)
+            uploads.append((f"{prefix}thumbs/{id_}_combined.webp", thumb))
+    page = work / "options.html"
+    page.write_text(render_options(groups), encoding="utf-8")
+    store.put_many(uploads, work)
+    store.put(f"meta/option-deliveries/{tag}.html", page)
+    print(f"Published {a.expected_options} options for {a.expected_ids} IDs.")
+    return 0
+
+
 def check_manifests_agree(new, new_index):
     """Both manifests must name the same files and checksums, or measuring would fail later."""
     listed = {}
@@ -555,6 +689,8 @@ def run(a, store, work):
     mask(tag)
     if not TAG.match(tag):
         raise Refuse(f"bad tag {tag!r}")
+    if getattr(a, "options", None):
+        return publish_options(a, source, tag, store, work)
     state, old = load_state(store, work)
     current = state["tag"]
     mask(current)
@@ -749,16 +885,28 @@ def main():
     p.add_argument("--repo", help="the artist's repo, owner/name. Default: DELIVERY_REPO")
     p.add_argument("--source", help="read the release from this folder, for tests")
     p.add_argument("--store", help="use this folder instead of the live bucket, for tests")
-    p.add_argument("--corrections", metavar="ZIP", help="overlay this corrections-only release asset")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--corrections", metavar="ZIP", help="overlay this corrections-only release asset")
+    mode.add_argument("--options", metavar="ZIP", help="publish this options release to a separate review page")
+    p.add_argument("--option-index", metavar="CSV", help="required file index for an options release")
     p.add_argument("--base-tag", help="required live full-delivery tag for a corrections overlay")
-    p.add_argument("--expected-ids", type=int, help="required number of correction IDs")
+    p.add_argument("--expected-ids", type=int, help="required number of IDs for a correction or options release")
+    p.add_argument("--expected-options", type=int, help="required number of artwork options")
     a = p.parse_args()
+    if a.options:
+        if (not a.tag or not re.fullmatch(r"\w[\w.-]*\.zip", a.options)
+                or not re.fullmatch(r"\w[\w.-]*\.csv", a.option_index or "")
+                or not a.expected_ids or a.expected_ids < 1
+                or not a.expected_options or a.expected_options < 1 or a.base_tag is not None):
+            p.error("options require an explicit tag, ZIP filename, --option-index and positive ID and option counts")
+    elif a.option_index is not None or a.expected_options is not None:
+        p.error("--option-index and --expected-options are used only with --options")
     if a.corrections:
         if (not a.tag or not a.base_tag or not TAG.fullmatch(a.base_tag) or not a.expected_ids or a.expected_ids < 1
                 or not re.fullmatch(r"[\w.-]+\.zip", a.corrections)):
             p.error("corrections require an explicit tag, a ZIP filename, --base-tag and a positive --expected-ids")
-    elif a.base_tag is not None or a.expected_ids is not None:
-        p.error("--base-tag and --expected-ids are used only with --corrections")
+    elif not a.options and (a.base_tag is not None or a.expected_ids is not None):
+        p.error("--base-tag and --expected-ids require a correction or options release")
     work = Path(tempfile.mkdtemp(prefix="gateway-pull-"))
     try:
         load_env()
