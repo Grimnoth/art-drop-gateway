@@ -88,6 +88,44 @@ test("viewer mode shows art and IDs, keeps direct delivery and layer navigation,
   assert.equal(g.writes.length, 0);
 });
 
+test("viewer trait controls stack filters within the current delivery and can clear them", async () => {
+  const g = gallery({
+    data: { ...deliveryData, review_enabled: false,
+      items: [
+        { ...deliveryData.items[0], traits: { Hat: "Cap", Eyes: "Shark" } },
+        { ...deliveryData.items[1], traits: { Hat: "Cap", Eyes: "Gold" } },
+        { ...deliveryData.items[2], traits: { Hat: "Crown", Eyes: "Shark" } },
+        { id: "00004", traits: { Hat: "Crown", Eyes: "Shark" }, upd: deliveryData.items[0].upd },
+      ] },
+    search: "?delivery=delivery-2026-11-21",
+  });
+  await g.run("init()");
+  assert.equal(g.node("trait-filters").hidden, false);
+  assert.match(g.node("trait-category").innerHTML, /Eyes/);
+  assert.match(g.node("trait-category").innerHTML, /Hat/);
+
+  const select = (id, value) => {
+    const field = g.node(id);
+    field.value = value;
+    field.onchange();
+  };
+  select("trait-category", "Hat");
+  assert.match(g.node("trait-value").innerHTML, /Cap/);
+  select("trait-value", "Cap");
+  assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002");
+  select("trait-category", "Eyes");
+  select("trait-value", "Shark");
+  assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001");
+  assert.match(g.node("tchips").innerHTML, /Hat: Cap/);
+  assert.match(g.node("tchips").innerHTML, /Eyes: Shark/);
+
+  g.node("tchips").onclick({ target: { closest: () => ({ dataset: { k: "Hat" } }) } });
+  assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00004");
+  g.node("tchips").onclick({ target: { closest: () => ({ dataset: { all: "1" } }) } });
+  assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002,00004");
+  assert.equal(g.writes.length, 0);
+});
+
 test("the download follows the full-size layer in the artwork detail", () => {
   const g = gallery();
   g.run('openDetail("00001")');
