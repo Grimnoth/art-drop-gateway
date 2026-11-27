@@ -78,6 +78,20 @@ try {
   await test("the login box is requested", async () => assert.match((await get("/")).headers.get("www-authenticate"), /^Basic realm=/));
 
   const ada = basic("ada", PW), max = basic("Max", PW);
+  await test("full-size originals download as PNG attachments behind the same password", async () => {
+    for (const [path, filename] of [
+      ["/full/00001/combined.png", "00001__combined.png"],
+      [`/o/${V}/Images/ID00001/00001__character.png`, "00001__character.png"],
+    ]) {
+      assert.equal((await get(path + "?download=1")).status, 401);
+      assert.equal((await get(path, ada)).headers.get("content-disposition"), null);
+      const download = await get(path + "?download=1", ada);
+      assert.equal(download.status, 200);
+      assert.equal(download.headers.get("content-type"), "image/png");
+      assert.equal(download.headers.get("content-disposition"), `attachment; filename="${filename}"`);
+      assert.deepEqual(Buffer.from(await download.arrayBuffer()), readFileSync(fakeFull));
+    }
+  });
   await test("a release options page is available only behind the password gate", async () => {
     const path = "/options/synthetic-release";
     assert.equal((await get(path)).status, 401);

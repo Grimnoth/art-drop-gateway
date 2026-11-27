@@ -8,7 +8,7 @@ import { backgroundOption, backgroundReviewUpdate, backgroundSelection, reviewSt
 const THUMB = /^\/thumbs\/(\d{5})_(character|background|combined)\.webp$/;
 const FULL = /^\/full\/(\d{5})\/(character|background|combined)\.png$/;
 // Files that pull_update.py uploaded for one release. They are never overwritten.
-const VERSIONED = /^\/o\/(r\/[0-9a-f]{16}\/(?:Images\/ID(\d{5})\/\2__(?:character|background|combined)\.png|thumbs\/\d{5}_(?:character|background|combined)\.webp))$/;
+const VERSIONED = /^\/o\/(r\/[0-9a-f]{16}\/(?:Images\/ID(\d{5})\/\2__(character|background|combined)\.png|thumbs\/\d{5}_(?:character|background|combined)\.webp))$/;
 const OPTION_PAGE = /^\/options\/([A-Za-z0-9][A-Za-z0-9._-]{0,80})$/;
 const ID = /^\d{5}$/;
 const MAX_BATCH = 200;
@@ -44,6 +44,12 @@ async function object(req, env, key, type, additionalHeaders = {}) {
   if (!obj) return text("not found", 404);
   const headers = { "Content-Type": type, "Cache-Control": "private, no-cache", ETag: obj.httpEtag, "X-Robots-Tag": "noindex", ...additionalHeaders };
   return new Response(obj.body ?? null, { status: obj.body ? 200 : 304, headers });
+}
+
+function pngDownload(url, id, kind) {
+  return url.searchParams.get("download") === "1"
+    ? { "Content-Disposition": `attachment; filename="${id}__${kind}.png"` }
+    : {};
 }
 
 const VERDICTS_SQL = `SELECT id, json_group_object(by_name, json_object('id', id, 'by', by_name, 'verdict', verdict, 'reasons', json(reasons), 'note', note, 'art_version', art_version, 'at', at)) AS people
@@ -217,8 +223,11 @@ export default {
         });
       }
       if ((m = THUMB.exec(path))) return await object(req, env, `thumbs/${m[1]}_${m[2]}.webp`, "image/webp");
-      if ((m = FULL.exec(path))) return await object(req, env, `Images/ID${m[1]}/${m[1]}__${m[2]}.png`, "image/png");
-      if ((m = VERSIONED.exec(path))) return await object(req, env, m[1], m[1].endsWith(".png") ? "image/png" : "image/webp");
+      if ((m = FULL.exec(path))) return await object(req, env, `Images/ID${m[1]}/${m[1]}__${m[2]}.png`, "image/png", pngDownload(url, m[1], m[2]));
+      if ((m = VERSIONED.exec(path))) {
+        if (m[2]) return await object(req, env, m[1], "image/png", pngDownload(url, m[2], m[3]));
+        return await object(req, env, m[1], "image/webp");
+      }
       return text("not found", 404);
     } catch (e) {
       console.error(e);

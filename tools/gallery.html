@@ -203,15 +203,17 @@ body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.
  <details id="bcompare" hidden>
   <summary>Compare backgrounds</summary>
   <div class="row"><button id="bview">Show combined images</button></div>
-  <figure><figcaption><strong>Before</strong> · Previous background</figcaption><a id="bprevious-link" target="_blank" rel="noopener"><img id="bprevious" width="1024" height="1024" alt="Previous version"></a><button id="bchoose-previous">Use previous background</button></figure>
-  <figure><figcaption><strong>After</strong> · Night delivery</figcaption><a id="bdelivered-link" target="_blank" rel="noopener"><img id="bdelivered" width="1024" height="1024" alt="Night delivery version"></a><button id="bchoose-delivered">Use night background</button></figure>
+  <figure><figcaption><strong>Before</strong> · Previous background</figcaption><a id="bprevious-link" target="_blank" rel="noopener"><img id="bprevious" width="1024" height="1024" alt="Previous version"></a><a id="bprevious-download" download>Download PNG</a> <button id="bchoose-previous">Use previous background</button></figure>
+  <figure><figcaption><strong>After</strong> · Night delivery</figcaption><a id="bdelivered-link" target="_blank" rel="noopener"><img id="bdelivered" width="1024" height="1024" alt="Night delivery version"></a><a id="bdelivered-download" download>Download PNG</a> <button id="bchoose-delivered">Use night background</button></figure>
  </details>
  <p id="bmessage" class="meta" hidden></p>
  <div id="stage"><img id="dimg" alt=""></div>
  <div class="side">
   <p id="dstatus" class="warn"></p>
+  <p id="dfinal" class="meta" hidden></p>
   <span class="meta">Tap the art to zoom to 100%.</span>
   <div class="chips" id="layers"></div>
+  <a id="ddownload" download>Download full-resolution PNG</a>
   <div class="chips" id="reasons"></div>
   <textarea aria-label="Review note" id="note" placeholder="Note for the artist (optional)"></textarea>
   <details id="reviewinfo"><summary>Review history &amp; art details</summary><div class="meta" id="dmeta"></div></details>
@@ -306,7 +308,7 @@ const FILTERS={
  backgroundChanged:["Changed vampires",d=>backgroundIds.has(d.id)&&deliveryChanged(d)],
  backgroundUnchanged:["Unchanged vampires",d=>backgroundIds.has(d.id)&&!deliveryChanged(d)],
  backgroundOk:["Changed vampires I marked OK",d=>deliveryChanged(d)&&backgroundArchive.previousReviews?.[d.id]?.verdict==="ok"],
- delivery:[()=>`Delivery ${deliveryTag.replace(/^delivery-/, "")}`, d=>!!deliveryTag && UPD[d.id]?.tag===deliveryTag],
+ delivery:[()=>`Delivery ${deliveryTag.replace(/^delivery-/, "")}`, d=>!!deliveryTag && (UPD[d.id]?.tag===deliveryTag || d.final_option?.tag===deliveryTag)],
  rereview:["Flagged art, needs re-review",d=>needsReReview(d.id)],
  updated:["Updated, needs my look",d=>stale(d.id)],
  roster:[()=>CFG.chosen,d=>d.mint],
@@ -396,7 +398,10 @@ function comparisonCard(d){
  const option=backgroundOption(d,backgroundArchive);
  const unchanged=backgroundIds.has(d.id)&&!deliveryChanged(d);
  const layer=$("comparison-layer").value==="background"?"background":"combined";
- const figure=(art,label)=>`<figure><figcaption>${label}</figcaption><a href="${fullUrl(d,layer,art)}" target="_blank" rel="noopener"><img loading="lazy" width="420" height="420" src="${thumbUrl(d,layer,art)}" alt="${label} · Vampire ${d.id}"></a></figure>`;
+ const figure=(art,label)=>{
+  const full=fullUrl(d,layer,art);
+  return `<figure><figcaption>${label}</figcaption><a href="${full}" target="_blank" rel="noopener"><img loading="lazy" width="420" height="420" src="${thumbUrl(d,layer,art)}" alt="${label} · Vampire ${d.id}"></a><a href="${full}?download=1" download aria-label="Download ${label} PNG">Download PNG</a></figure>`;
+ };
  const state=comparisonChoice(d);
  const status=option?state.status:unchanged?comparisonFlagStatus(d.id):"A newer version is now live";
  const choice=option&&!isArtist()?`<button class="primary" id="comparison-choice-${d.id}" data-background-choice="${state.choice}" ${choosingBackground.has(d.id)?"disabled":""}>${state.label}</button>`:"";
@@ -492,6 +497,7 @@ function paintBackground(d){
   const src=fullUrl(d,backgroundLayer,option[version]);
   $(image).src=src;
   $(image+"-link").href=src;
+  $(image+"-download").href=src+"?download=1";
   const button=$("bchoose-"+version);
   button.hidden=isArtist();
   button.disabled=choosingBackground.has(d.id)||choice===version;
@@ -529,7 +535,11 @@ async function chooseBackground(choice,id=$("detail").dataset.id){
 function paintDetail(){
  const id=$("detail").dataset.id,d=byId[id];
  paintBackground(d);
- $("dimg").src=fullUrl(d,dLayer);
+ const full=fullUrl(d,dLayer);
+ $("dimg").src=full;
+ $("ddownload").href=full+"?download=1";
+ $("dfinal").hidden=!d.final_option;
+ $("dfinal").textContent=d.final_option?`Final option ${d.final_option.number} · ${d.final_option.label}`:"";
  $("layers").innerHTML=["combined","character","background"].map(l=>`<button data-l="${l}" class="${l==dLayer?"on":""}">${l[0].toUpperCase()+l.slice(1)}</button>`).join("");
  $("reasons").innerHTML=REASONS.map(r=>`<button data-r="${r}" class="${dReasons.has(r)?"on":""}">${r}</button>`).join("");
  const v=mine(id);

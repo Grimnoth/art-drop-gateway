@@ -911,7 +911,9 @@ def _(t):
     assert result.returncode == 0, result.stderr + result.stdout
     page = (store / "meta/option-deliveries/options.html").read_text()
     assert "Cliff &amp; &lt;script&gt;" in page and "<script>" not in page
-    links = set(re.findall(r'="/o/(r/[^"]+)"', page))
+    urls = re.findall(r'="/o/(r/[^"]+)"', page)
+    links = {url.split("?")[0] for url in urls}
+    assert len({url for url in urls if url.endswith(".png?download=1")}) == 9
     originals = [p for p in links if p.endswith(".png")]
     thumbs = [p for p in links if p.endswith(".webp")]
     assert len(originals) == 9 and len(thumbs) == 3
@@ -940,6 +942,43 @@ def _(t):
     assert result.returncode == 3, result.stderr + result.stdout
     assert not (store / "meta/option-deliveries/options.html").exists()
     assert all((store / p).read_bytes() == data for p, data in before.items())
+
+
+@test("finalizing one option publishes its exact layers, keeps other pirates and supports reruns")
+def _(t):
+    store, original = make_store(t)
+    source, options = make_options_release(t)
+    args = (*OPTIONS_ARGS, "--finalize-options")
+    env = {"OPTION_SELECTIONS": '{"00001":2}'}
+    before = files(store)
+    preview = tool(store, source, *args, tag="options", env=env)
+    assert preview.returncode == 0 and "1 final option" in preview.stdout, preview.stderr + preview.stdout
+    assert files(store) == before
+    result = tool(store, source, *args, "--apply", tag="options", env=env)
+    assert result.returncode == 0, result.stderr + result.stdout
+    visible = shown(store)
+    assert visible["tag"] == "first"
+    for layer in KINDS:
+        assert visible["00001", layer] == options["00001", "2"][layer]
+        assert visible["00001", layer, "thumb"]
+        assert visible["00002", layer] == original["00002"][layer]
+    assert items(store)["00001"]["final_option"] == {"tag": "options", "number": 2, "label": "Cliff & <script>"}
+    assert "final_option" not in items(store)["00002"]
+    published = files(store)
+    assert tool(store, source, *args, "--apply", tag="options", env=env).returncode == 0
+    assert files(store) == published
+
+
+@test("invalid final choices cannot publish a partial selection")
+def _(t):
+    store, _ = make_store(t)
+    source, _ = make_options_release(t)
+    before = files(store)
+    for selection in ('{}', '{"00001":true}', '{"00001":1,"00002":2}', '{"00001":1,"00004":1}'):
+        result = tool(store, source, *OPTIONS_ARGS, "--finalize-options", "--apply", tag="options",
+                      env={"OPTION_SELECTIONS": selection})
+        assert result.returncode == 2, result.stderr + result.stdout
+        assert files(store) == before
 
 
 print(f"{failures} FAILED" if failures else "all passed")
