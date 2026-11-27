@@ -132,6 +132,12 @@ artist's art** with **Overlay the configured correction delivery**. Select **Onl
 for a preview without publishing. For the layered `File_Index.csv` format, the runner downloads the
 ZIP during preview to check and hash the layers.
 
+A selected-only final delivery can supply `Characters/`, `Backgrounds/` and `Combined/` folders
+with the original ID filenames. Set `final_index` in `CORRECTION_DELIVERY` to the attached CSV
+with `id`, `layer`, `file` and `sha256` columns. Set `final_choices` to an object keyed by ID,
+with `number` and `label` for each approved option. The publisher verifies all indexed PNGs and
+lists every final choice in that delivery’s gallery filter, including layers already on the site.
+
 An options delivery puts the art on a password-protected page at `/options/<release tag>`.
 The page groups alternatives by ID and opens each option's character, background and combined image at full size.
 The importer checks the ZIP and all indexed layers, then publishes the page after its images and thumbnails.
