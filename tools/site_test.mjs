@@ -5,6 +5,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, rmSync, mkdtempSync, mkdirSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
+import { once } from "node:events";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 
@@ -20,7 +21,8 @@ const get = (path, auth, init = {}) => fetch(BASE + path, { redirect: "manual", 
 const post = (path, auth, body, origin = BASE) => get(path, auth, { method: "POST", body: JSON.stringify(body.map(r=>({...r,catalog_version:catalogVersion}))), headers: { Origin: origin } });
 
 const state = mkdtempSync(join(tmpdir(), "gateway-site-test-"));
-writeFileSync(".dev.vars", `REVIEW_PASSWORD="${PW}"\nALLOW_HTTP="1"\n`);
+const devVars = (reviewing) => `REVIEW_PASSWORD="${PW}"\nALLOW_HTTP="1"\nREVIEW_ENABLED="${reviewing}"\n`;
+writeFileSync(".dev.vars", devVars(true));
 const wr = (...a) => execFileSync(W, [...a, ...CONFIG, "--persist-to", state], { stdio: "pipe" });
 mkdirSync("public", { recursive: true });
 copyFileSync("../tools/gallery.html", "public/gallery.html");
@@ -42,12 +44,25 @@ const V = "r/0123456789abcdef";
 wr("r2", "object", "put", "art-drop-gateway/meta/option-deliveries/synthetic-release.html", "--local", "--file", optionsPage);
 wr("r2", "object", "put", `art-drop-gateway/${V}/Images/ID00001/00001__character.png`, "--local", "--file", fakeFull);
 wr("r2", "object", "put", `art-drop-gateway/${V}/thumbs/00001_character.webp`, "--local", "--file", fakeThumb);
-const dev = spawn(W, ["dev", ...CONFIG, "--port", "8799", "--ip", "127.0.0.1", "--persist-to", state], { stdio: "ignore" });
+const startDev = () => spawn(W, ["dev", ...CONFIG, "--port", "8799", "--ip", "127.0.0.1", "--persist-to", state], { stdio: "ignore" });
+let dev = startDev();
+async function stopDev() {
+  if (dev.exitCode !== null || dev.signalCode !== null) return;
+  const ended = once(dev, "exit");
+  dev.kill("SIGTERM");
+  await ended;
+}
+async function waitForDev() {
+  for (let i = 0; i < 60; i++) {
+    try { await get("/"); return; } catch { await new Promise((r) => setTimeout(r, 500)); }
+  }
+  throw new Error("Worker did not start");
+}
 
 let failed = 0;
 const test = async (name, fn) => { try { await fn(); console.log("ok  ", name); } catch (e) { failed++; console.log("FAIL", name, e.message); } };
 try {
-  for (let i = 0; i < 60; i++) { try { await get("/"); break; } catch { await new Promise((r) => setTimeout(r, 500)); } }
+  await waitForDev();
   catalogVersion = (await (await get("/data", basic("Ada", PW))).json()).catalog_version;
 
   await test("the schema upgrade preserves existing reviews and is safe to repeat", async () => {
@@ -262,8 +277,32 @@ try {
     catalogVersion = (await read()).catalog_version;
     assert.equal((await select("00001", "previous", ada, BASE, end.background_selections["00001"].seq)).status, 404);
   });
+  await test("viewer mode exposes art but withholds review records, exports, and write endpoints", async () => {
+    const original = await (await get("/data", ada)).json();
+    assert.equal(original.review_enabled, true);
+    assert.ok(Object.keys(original.verdicts).length);
+    await stopDev();
+    writeFileSync(".dev.vars", devVars(false));
+    dev = startDev();
+    await waitForDev();
+    const viewer = await (await get("/data", ada)).json();
+    assert.equal(viewer.review_enabled, false);
+    assert.deepEqual(viewer.items, original.items);
+    assert.deepEqual(viewer.verdicts, {});
+    assert.deepEqual(viewer.triage, {});
+    assert.deepEqual(viewer.background_options.previousReviews, {});
+    assert.deepEqual(viewer.background_selections, original.background_selections);
+    for (const path of ["/verdict", "/triage", "/background"]) {
+      assert.equal((await post(path, ada, [{ id: "00001", verdict: "flag" }])).status, 403);
+    }
+    for (const path of ["/artist.csv", "/flagged.csv"]) assert.equal((await get(path, ada)).status, 403);
+    const png = await get("/full/00001/combined.png?download=1", ada);
+    assert.equal(png.status, 200);
+    assert.equal(png.headers.get("content-disposition"), 'attachment; filename="00001__combined.png"');
+    assert.equal((await get("/data")).status, 401);
+  });
 } finally {
-  dev.kill("SIGTERM"); rmSync(".dev.vars", { force: true }); rmSync(state, { recursive: true, force: true });
+  await stopDev(); rmSync(".dev.vars", { force: true }); rmSync(state, { recursive: true, force: true });
 }
 console.log(failed ? `${failed} FAILED` : "all passed");
 process.exit(failed ? 1 : 0);
