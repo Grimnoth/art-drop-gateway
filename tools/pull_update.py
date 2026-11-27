@@ -393,28 +393,44 @@ def correction_manifest(source, tag, archive, expected_ids, names, old, work, de
 
 
 def final_bundle_manifest(a, source, tag, names, old, work, dest):
-    checksum = f"{a.corrections}.sha256"
-    if not {a.corrections, a.final_index, checksum}.issubset(names):
-        raise Refuse("the final release needs the ZIP, its SHA256 sidecar and the final file index")
-    sums = read_sums(source.fetch(tag, checksum, work))
-    if set(sums) != {a.corrections}:
-        raise Refuse("the final checksum sidecar must name only the selected ZIP")
-
+    pinned_digest = getattr(a, "final_sha256", None)
     indexed, ids = {}, set()
-    for row in read_csv(source.fetch(tag, a.final_index, work)):
-        id_, kind, path, digest = (row.get(key) or "" for key in ("id", "layer", "file", "sha256"))
-        path = path.replace("\\", "/")
-        if (not re.fullmatch(r"[0-9]{5}", id_) or kind not in KINDS or not HEX64.fullmatch(digest)
-                or path != f"{LAYER_DIRS[kind]}/{id_}__{kind}.png" or path in indexed):
-            raise Refuse("invalid or repeated artwork in the final file index")
-        indexed[path] = (id_, kind, digest)
-        ids.add(id_)
+    if pinned_digest:
+        if a.corrections not in names:
+            raise Refuse("the final release does not contain the selected ZIP")
+        sums = {a.corrections: pinned_digest}
+    else:
+        checksum = f"{a.corrections}.sha256"
+        if not {a.corrections, a.final_index, checksum}.issubset(names):
+            raise Refuse("the final release needs the ZIP, its SHA256 sidecar and the final file index")
+        sums = read_sums(source.fetch(tag, checksum, work))
+        if set(sums) != {a.corrections}:
+            raise Refuse("the final checksum sidecar must name only the selected ZIP")
+
+        for row in read_csv(source.fetch(tag, a.final_index, work)):
+            id_, kind, path, digest = (row.get(key) or "" for key in ("id", "layer", "file", "sha256"))
+            path = path.replace("\\", "/")
+            if (not re.fullmatch(r"[0-9]{5}", id_) or kind not in KINDS or not HEX64.fullmatch(digest)
+                    or path != f"{LAYER_DIRS[kind]}/{id_}__{kind}.png" or path in indexed):
+                raise Refuse("invalid or repeated artwork in the final file index")
+            indexed[path] = (id_, kind, digest)
+            ids.add(id_)
 
     try:
         choices = json.loads(setting("FINAL_SELECTIONS"))
     except json.JSONDecodeError as exc:
         raise Refuse("FINAL_SELECTIONS must be a JSON object of finalized choices") from exc
-    if not isinstance(choices, dict) or choices.keys() != ids or len(ids) != a.expected_ids:
+    if not isinstance(choices, dict):
+        raise Refuse("FINAL_SELECTIONS must be a JSON object of finalized choices")
+    if pinned_digest:
+        ids = set(choices)
+        if any(not re.fullmatch(r"[0-9]{5}", id_) for id_ in ids):
+            raise Refuse("each approved final ID must have five digits")
+        indexed = {
+            f"{LAYER_DIRS[kind]}/{id_}__{kind}.png": (id_, kind, None)
+            for id_ in ids for kind in KINDS
+        }
+    if choices.keys() != ids or len(ids) != a.expected_ids:
         raise Refuse("the final selections do not match the indexed IDs and expected count")
     final = {}
     for id_, choice in choices.items():
@@ -429,9 +445,19 @@ def final_bundle_manifest(a, source, tag, names, old, work, dest):
         for path, entry in indexed_art_members(z, indexed, set(LAYER_DIRS.values())).items():
             id_, kind, digest = indexed[path]
             with z.open(entry) as image:
-                if hashlib.file_digest(image, "sha256").hexdigest() != digest:
+                actual_digest = hashlib.file_digest(image, "sha256").hexdigest()
+                if digest is None:
+                    image.seek(0)
+                    try:
+                        with Image.open(image) as png:
+                            if png.format != "PNG":
+                                raise Refuse("a final layer is not a PNG")
+                            png.verify()
+                    except (OSError, SyntaxError) as exc:
+                        raise Refuse("a final layer is not a readable PNG") from exc
+                elif actual_digest != digest:
                     raise Refuse("a final PNG does not match its indexed SHA256")
-            records.append((id_, kind, entry.filename, digest))
+            records.append((id_, kind, entry.filename, actual_digest))
     members = write_correction_index(records, old, a.expected_ids, dest)
     print(f"Checked {len(records)} final PNGs.", flush=True)
     return sums, members, archive, final
@@ -793,7 +819,7 @@ def run(a, store, work):
         sums, batch_members, correction_zip, final = selected_option_manifest(
             a, source, tag, names, old, download, new_index
         )
-    elif getattr(a, "final_index", None):
+    elif getattr(a, "final_index", None) or getattr(a, "final_sha256", None):
         sums, batch_members, correction_zip, final = final_bundle_manifest(
             a, source, tag, names, old, download, new_index
         )
@@ -989,12 +1015,16 @@ def main():
     p.add_argument("--option-index", metavar="CSV", help="required file index for an options release")
     p.add_argument("--finalize-options", action="store_true", help="publish the options selected in OPTION_SELECTIONS")
     p.add_argument("--base-tag", help="required live full-delivery tag for a corrections overlay")
-    p.add_argument("--final-index", metavar="CSV", help="final selection index for a selected-only corrections ZIP")
+    final = p.add_mutually_exclusive_group()
+    final.add_argument("--final-index", metavar="CSV", help="final selection index for a selected-only corrections ZIP")
+    final.add_argument("--final-sha256", metavar="SHA256", help="publisher's digest for a ZIP-only final pack")
     p.add_argument("--expected-ids", type=int, help="required number of IDs for a correction or options release")
     p.add_argument("--expected-options", type=int, help="required number of artwork options")
     a = p.parse_args()
     if a.final_index is not None and (not a.corrections or not re.fullmatch(r"\w[\w.-]*\.csv", a.final_index)):
         p.error("--final-index requires --corrections and a CSV filename")
+    if a.final_sha256 is not None and (not a.corrections or not HEX64.fullmatch(a.final_sha256)):
+        p.error("--final-sha256 requires --corrections and a 64-digit lowercase hexadecimal SHA256")
     if a.options:
         if (not a.tag or not re.fullmatch(r"\w[\w.-]*\.zip", a.options)
                 or not re.fullmatch(r"\w[\w.-]*\.csv", a.option_index or "")

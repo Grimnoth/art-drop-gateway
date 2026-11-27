@@ -1050,5 +1050,53 @@ def _(t):
         assert files(store) == before
 
 
+def pinned_final_pack(source, artwork, *, defect=""):
+    make_final_bundle(source, artwork, defect=defect)
+    (source / "Selected_File_Index.csv").unlink()
+    (source / "Selected.zip.sha256").unlink()
+    digest = hashlib.sha256((source / "Selected.zip").read_bytes()).hexdigest()
+    return (*FINAL_BUNDLE_ARGS[:-2], "--final-sha256", digest)
+
+
+@test("an approved ZIP-only pack validates the publisher digest and publishes all selected IDs")
+def _(t):
+    store, art = make_store(t)
+    fresh = triplet(201)
+    source = t / "final"
+    args = pinned_final_pack(source, {"00001": fresh, "00002": art["00002"]})
+    env = {"FINAL_SELECTIONS": json.dumps(FINAL_BUNDLE_CHOICES)}
+    before = files(store)
+    preview = tool(store, source, *args, tag="clean-finals", env=env)
+    assert preview.returncode == 0 and "Checked 6 final PNGs." in preview.stdout, preview.stderr + preview.stdout
+    assert files(store) == before
+    applied = tool(store, source, *args, "--apply", tag="clean-finals", env=env)
+    assert applied.returncode == 0, applied.stderr + applied.stdout
+    for id_, choice in FINAL_BUNDLE_CHOICES.items():
+        assert items(store)[id_]["final_option"] == {"tag": "clean-finals", **choice}
+    for kind in KINDS:
+        assert shown(store)["00001", kind] == fresh[kind]
+        assert shown(store)["00002", kind] == art["00002"][kind]
+        assert shown(store)["00003", kind] == art["00003"][kind]
+
+
+@test("the ZIP-only pack refuses a wrong digest, extra art, wrong IDs or non-PNGs before publishing")
+def _(t):
+    store, art = make_store(t)
+    before = files(store)
+    env = {"FINAL_SELECTIONS": json.dumps(FINAL_BUNDLE_CHOICES)}
+    for defect in ("archive-digest", "extra", "wrong-id", "bad-png"):
+        source = t / defect
+        fresh = triplet(200)
+        if defect == "bad-png":
+            fresh = {**fresh, "background": b"not a PNG"}
+        second = "00003" if defect == "wrong-id" else "00002"
+        args = pinned_final_pack(source, {"00001": fresh, second: art[second]}, defect=defect)
+        if defect == "archive-digest":
+            args = (*args[:-1], "0" * 64)
+        result = tool(store, source, *args, "--apply", tag="clean-finals", env=env)
+        assert result.returncode == 2 and "REFUSED" in result.stderr, result.stderr + result.stdout
+        assert files(store) == before
+
+
 print(f"{failures} FAILED" if failures else "all passed")
 sys.exit(1 if failures else 0)
