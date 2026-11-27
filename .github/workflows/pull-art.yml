@@ -84,12 +84,14 @@ jobs:
           baseline=$(jq -er '.baseline | strings | select(length > 0)' <<< "$CORRECTION_DELIVERY")
           count=$(jq -er '.count | numbers' <<< "$CORRECTION_DELIVERY")
           final_index=$(jq -er '.final_index // "" | strings' <<< "$CORRECTION_DELIVERY")
+          final_sha256=$(jq -er '.final_sha256 // "" | strings' <<< "$CORRECTION_DELIVERY")
           extra=()
-          if [[ -n "$final_index" ]]; then
+          if [[ -n "$final_index" || -n "$final_sha256" ]]; then
             FINAL_SELECTIONS=$(jq -ce '.final_choices | objects' <<< "$CORRECTION_DELIVERY")
             export FINAL_SELECTIONS
-            extra=(--final-index "$final_index")
           fi
+          if [[ -n "$final_index" ]]; then extra+=(--final-index "$final_index"); fi
+          if [[ -n "$final_sha256" ]]; then extra+=(--final-sha256 "$final_sha256"); fi
           python3 -I tools/pull_update.py --repo="$repo" --corrections="$archive" \
             --base-tag="$baseline" --expected-ids="$count" "${extra[@]}" ${{ inputs.dry_run && ' ' || '--apply' }} -- "$tag"
       - name: Publish options

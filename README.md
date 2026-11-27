@@ -143,6 +143,9 @@ with the original ID filenames. Set `final_index` in `CORRECTION_DELIVERY` to th
 with `id`, `layer`, `file` and `sha256` columns. Set `final_choices` to an object keyed by ID,
 with `number` and `label` for each approved option. The publisher verifies all indexed PNGs and
 lists every final choice in that delivery’s gallery filter, including layers already on the site.
+For a final delivery that attaches only a ZIP, use the publisher's checksum as `final_sha256`
+in place of `final_index`. The runner verifies that digest, requires exactly one PNG for
+each approved ID and layer, and computes the per-file hashes before any publish.
 
 An options delivery puts the art on a password-protected page at `/options/<release tag>`.
 The page groups alternatives by ID and opens each option's character, background and combined image at full size.
