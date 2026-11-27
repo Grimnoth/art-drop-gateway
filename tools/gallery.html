@@ -11,6 +11,11 @@ header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px
 h1{font-size:15px;margin:0 8px 0 0}
 select,input,button{background:#26282f;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:6px 9px;font:inherit;min-height:34px}
 button{cursor:pointer}button:hover{border-color:var(--dim)}
+body.viewer .review-only{display:none!important}
+.download-icon{display:inline-flex;position:relative;align-items:center;justify-content:center;min-width:44px;min-height:44px;background:#26282f;color:var(--text);border:1px solid var(--line);border-radius:7px;text-decoration:none;font-size:24px;line-height:1}
+.download-icon::after{content:"";position:absolute;bottom:9px;width:14px;height:3px;border:1px solid currentColor;border-top:0}
+.download-icon:hover{border-color:var(--dim)}
+.download-icon:focus-visible,.tile:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 button.primary{background:var(--ok);border-color:var(--ok);color:#0b1a12;font-weight:600}
 .progress{height:4px;background:#26282f;margin-top:8px;border-radius:2px;overflow:hidden;display:flex}
 .progress i{display:block;height:100%}
@@ -150,7 +155,7 @@ body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.
  .box{margin:12vh 12px;max-width:none}
  .fix{grid-template-columns:72px minmax(0,1fr)}
  .fix img{width:72px;height:72px}
- body.artist #detail{padding-bottom:env(safe-area-inset-bottom,0px)}
+ body.artist #detail,body.viewer #detail{padding-bottom:env(safe-area-inset-bottom,0px)}
 }
 
 @media(min-width:951px),(min-width:821px) and (min-height:501px){
@@ -161,72 +166,74 @@ body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.
  #tchips{flex-basis:100%}
  .progress{flex-basis:100%;margin-top:0}
 }
-</style></head><body>
+</style></head><body class="viewer">
 <header>
  <div class="row">
   <h1 id="ttl">Art Review</h1>
-  <select id="filter" aria-label="Filter"></select>
-  <button id="whobtn" title="Change reviewer"></button>
+  <select id="filter" class="review-only" aria-label="Filter"></select>
+  <button id="whobtn" class="review-only" title="Change reviewer"></button>
  </div>
- <details id="tools"><summary>Filters &amp; lists</summary><div class="row">
+ <div class="row">
+  <input id="jump" placeholder="Go to ID" inputmode="numeric" size="8" aria-label="Go to ID">
+  <select id="view" aria-label="Layer">
+   <option value="combined">Combined</option><option value="character">Character only</option><option value="background">Background only</option>
+  </select>
+  <a id="all-art" href="/" hidden>All art</a>
+ </div>
+ <details id="tools" class="review-only"><summary>Filters &amp; lists</summary><div class="row">
   <select id="type" aria-label="Character type"></select>
   <select id="sort" aria-label="Order">
    <option value="id">ID order</option><option value="shuffle">Random sample</option>
    <option value="contrast">Hardest to read first</option><option value="coverage">Smallest figure first</option>
   </select>
-  <select id="view" aria-label="Layer">
-   <option value="combined">Combined</option><option value="character">Character only</option><option value="background">Background only</option>
-  </select>
   <select id="tile" aria-label="Tile size"><option value="120">Small</option><option value="170" selected>Medium</option><option value="260">Large</option><option value="360">Huge</option></select>
-  <input id="jump" placeholder="Go to ID" inputmode="numeric" size="8" aria-label="Go to ID">
   <button id="artbtn" class="primary">Artist view</button>
   <button id="fixbtn">Fix list</button>
  </div></details>
- <div class="row">
+ <div class="row review-only">
   <span id="stats"></span>
  </div>
- <div class="row" id="tchips"></div>
- <div class="progress"><i id="pOk" style="background:var(--ok)"></i><i id="pFlag" style="background:var(--flag)"></i></div>
+ <div class="row review-only" id="tchips"></div>
+ <div class="progress review-only"><i id="pOk" style="background:var(--ok)"></i><i id="pFlag" style="background:var(--flag)"></i></div>
 </header>
 <main>
- <section id="vampire-review" hidden><h2>Vampire review</h2>
+ <section id="vampire-review" class="review-only" hidden><h2>Vampire review</h2>
   <div class="row" id="vampire-filters" aria-label="Vampire review filters"></div>
   <div class="row"><label>Compare <select id="comparison-layer"><option value="combined">Full images</option><option value="background">Backgrounds only</option></select></label><button id="comparison-fixes">Fix list</button><a href="/">Back to all art</a></div>
  </section>
- <a id="vampire-review-link" href="/?backgrounds=all" hidden>Vampire review</a>
- <details id="helpbox"><summary>How to review</summary><p id="help"></p></details>
+ <a id="vampire-review-link" class="review-only" href="/?backgrounds=all" hidden>Vampire review</a>
+ <details id="helpbox" class="review-only"><summary>How to review</summary><p id="help"></p></details>
  <div id="grid"></div>
- <nav><button id="prev">Back</button><span id="pageinfo"></span><button id="good" class="primary">Page looks good, next</button><button id="next">Skip page</button></nav>
+ <nav><button id="prev">Back</button><span id="pageinfo"></span><button id="good" class="primary review-only">Page looks good, next</button><button id="next">Skip page</button></nav>
 </main>
 <div id="detail" role="dialog" aria-labelledby="dtitle"><div class="dwrap">
- <div class="detailbar"><h2 id="dtitle"></h2><div class="row"><button id="dprev" aria-label="Previous artwork">&larr;</button><button id="dnext" aria-label="Next artwork">&rarr;</button><button id="dclose">Close</button></div></div>
- <details id="bcompare" hidden>
+ <div class="detailbar"><h2 id="dtitle"></h2><div class="row"><button id="dprev" aria-label="Previous artwork">&larr;</button><button id="dnext" aria-label="Next artwork">&rarr;</button><a id="ddownload" download class="download-icon" aria-label="Download full-resolution PNG" title="Download full-resolution PNG"><span aria-hidden="true">↓</span></a><button id="dclose">Close</button></div></div>
+ <details id="bcompare" class="review-only" hidden>
   <summary>Compare backgrounds</summary>
   <div class="row"><button id="bview">Show combined images</button></div>
-  <figure><figcaption><strong>Before</strong> · Previous background</figcaption><a id="bprevious-link" target="_blank" rel="noopener"><img id="bprevious" width="1024" height="1024" alt="Previous version"></a><a id="bprevious-download" download>Download PNG</a> <button id="bchoose-previous">Use previous background</button></figure>
-  <figure><figcaption><strong>After</strong> · Night delivery</figcaption><a id="bdelivered-link" target="_blank" rel="noopener"><img id="bdelivered" width="1024" height="1024" alt="Night delivery version"></a><a id="bdelivered-download" download>Download PNG</a> <button id="bchoose-delivered">Use night background</button></figure>
+  <figure><figcaption><strong>Before</strong> · Previous background</figcaption><a id="bprevious-link" target="_blank" rel="noopener"><img id="bprevious" width="1024" height="1024" alt="Previous version"></a><a id="bprevious-download" download class="download-icon" aria-label="Download previous PNG" title="Download previous PNG"><span aria-hidden="true">↓</span></a> <button id="bchoose-previous">Use previous background</button></figure>
+  <figure><figcaption><strong>After</strong> · Night delivery</figcaption><a id="bdelivered-link" target="_blank" rel="noopener"><img id="bdelivered" width="1024" height="1024" alt="Night delivery version"></a><a id="bdelivered-download" download class="download-icon" aria-label="Download night PNG" title="Download night PNG"><span aria-hidden="true">↓</span></a> <button id="bchoose-delivered">Use night background</button></figure>
  </details>
- <p id="bmessage" class="meta" hidden></p>
+ <p id="bmessage" class="meta review-only" hidden></p>
  <div id="stage"><img id="dimg" alt=""></div>
  <div class="side">
-  <p id="dstatus" class="warn"></p>
-  <p id="dfinal" class="meta" hidden></p>
-  <span class="meta">Tap the art to zoom to 100%.</span>
+  <p id="dstatus" class="warn review-only"></p>
+  <p id="dfinal" class="meta review-only" hidden></p>
+  <span class="meta review-only">Tap the art to zoom to 100%.</span>
   <div class="chips" id="layers"></div>
-  <a id="ddownload" download>Download full-resolution PNG</a>
-  <div class="chips" id="reasons"></div>
-  <textarea aria-label="Review note" id="note" placeholder="Note for the artist (optional)"></textarea>
-  <details id="reviewinfo"><summary>Review history &amp; art details</summary><div class="meta" id="dmeta"></div></details>
-  <div class="row" id="dbtns"><button class="primary" id="dok">OK</button><button id="dflag" style="background:var(--flag);border-color:var(--flag);color:#fff">Flag</button><button id="dclear">Clear</button></div>
+  <div class="chips review-only" id="reasons"></div>
+  <textarea class="review-only" aria-label="Review note" id="note" placeholder="Note for the artist (optional)"></textarea>
+  <details id="reviewinfo" class="review-only"><summary>Review history &amp; art details</summary><div class="meta" id="dmeta"></div></details>
+  <div class="row review-only" id="dbtns"><button class="primary" id="dok">OK</button><button id="dflag" style="background:var(--flag);border-color:var(--flag);color:#fff">Flag</button><button id="dclear">Clear</button></div>
  </div>
 </div></div>
-<div id="fixes" class="sheet"><div class="swrap">
+<div id="fixes" class="sheet review-only"><div class="swrap">
  <div class="row" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0">Fix list</h2><button id="fixclose">Close</button></div>
  <p class="meta" id="fixsum"></p>
  <div class="row" style="margin-bottom:12px"><a href="/artist.csv"><button class="primary">Download list for the artist</button></a><a href="/flagged.csv"><button>Download all flagged</button></a></div>
  <div id="fixrows"></div>
 </div></div>
-<div id="artlist" class="sheet"><div class="swrap">
+<div id="artlist" class="sheet review-only"><div class="swrap">
  <div class="row" style="justify-content:space-between;margin-bottom:10px"><h2 style="margin:0" id="artttl">Artist view</h2><button id="artclose">Close</button></div>
  <div class="guide">
   <p id="artintro"></p>
@@ -239,7 +246,7 @@ body.artist .fl,body.artist #good,body.artist #fixbtn,body.artist #reasons,body.
  <div id="artrows"></div>
  <nav><button id="artmore">Show more</button></nav>
 </div></div>
-<div id="whoask" class="sheet"><form class="box" id="whoform">
+<div id="whoask" class="sheet review-only"><form class="box" id="whoform">
  <h2 style="margin:0">Who is reviewing?</h2>
  <p class="meta" style="margin:0">Each person gets their own review. Your name goes next to your flags and notes.</p>
  <input id="whoname" list="whoknown" placeholder="Your name" maxlength="60" autocomplete="off" aria-label="Your name">
@@ -259,9 +266,9 @@ const requestedDelivery = query.get("delivery") || "";
 const linkedDelivery = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/.test(requestedDelivery) ? requestedDelivery : "";
 const backgroundFilters = { all: "backgroundVampires", changed: "backgroundChanged", unchanged: "backgroundUnchanged", "previously-ok": "backgroundOk" };
 const requestedBackgrounds = query.get("backgrounds");
-const backgroundQueue = Object.hasOwn(backgroundFilters, requestedBackgrounds) ? backgroundFilters[requestedBackgrounds] : "";
-const linkedQueue = linkedDelivery || backgroundQueue;
-const pageSize = backgroundQueue ? 12 : PAGE;
+const requestedComparison = Object.hasOwn(backgroundFilters, requestedBackgrounds) ? backgroundFilters[requestedBackgrounds] : "";
+let backgroundQueue = "", linkedQueue = linkedDelivery, pageSize = PAGE;
+let REVIEW_ENABLED = false;
 let backgroundArchive = null, backgroundIds = new Set(), backgroundSelections = {}, backgroundLayer = "background";
 const choosingBackground = new Set();
 const flaggingComparison = new Set();
@@ -269,7 +276,7 @@ let deliveryTag = linkedDelivery;
 // The artist reads flags and does not review. The name comes from the login.
 // Display words come from the Worker's settings (wrangler.toml [vars]), so one page serves any project.
 let CFG={title:"Art Review",noun:"Item",nouns:"items",artist:"Artist",chosen:"Chosen",others:"Not chosen",othersTag:"N"},HASCHOSEN=false;
-const isArtist=()=>ME.toLowerCase()==CFG.artist.toLowerCase();
+const isArtist=()=>REVIEW_ENABLED&&ME.toLowerCase()==CFG.artist.toLowerCase();
 function applyConfig(){
  document.title=$("ttl").textContent=CFG.title;
  $("artbtn").textContent=$("artttl").textContent=`Flags for ${CFG.artist}`;
@@ -333,6 +340,7 @@ const MISMATCH=3;
 const hash=(id)=>{let h=2166136261;for(const c of id)h=Math.imul(h^c.charCodeAt(0),16777619);return h>>>0};
 function state(){try{return JSON.parse(localStorage.getItem("bw")||"{}")}catch{return{}}}
 function saveState(){
+ if(!REVIEW_ENABLED)return;
  try {
   const queue = linkedQueue ? state() : {f:$("filter").value,ty:$("type").value,tr:TR,page};
   localStorage.setItem("bw", JSON.stringify({...queue,me:ME,s:$("sort").value,v:$("view").value,t:$("tile").value}));
@@ -344,6 +352,7 @@ async function post(batch,path="/verdict"){
 }
 function toast(t){$("toast").textContent=t;$("toast").style.display="block";setTimeout(()=>$("toast").style.display="none",5000)}
 async function setV(id,verdict,reasons=[],note=""){
+ if(!REVIEW_ENABLED)return false;
  const prev=mine(id),rec={id,by:ME,verdict,reasons,note,art_version:artVersion(reviewUpdate(id)),at:Math.floor(Date.now()/1000)};
  const repaint=()=>{paintTile(id);if(backgroundQueue)paintComparisonFlag(id);stats()};
  (ALL[id]??={})[ME]=rec;repaint();
@@ -400,7 +409,7 @@ function comparisonCard(d){
  const layer=$("comparison-layer").value==="background"?"background":"combined";
  const figure=(art,label)=>{
   const full=fullUrl(d,layer,art);
-  return `<figure><figcaption>${label}</figcaption><a href="${full}" target="_blank" rel="noopener"><img loading="lazy" width="420" height="420" src="${thumbUrl(d,layer,art)}" alt="${label} · Vampire ${d.id}"></a><a href="${full}?download=1" download aria-label="Download ${label} PNG">Download PNG</a></figure>`;
+  return `<figure><figcaption>${label}</figcaption><a href="${full}" target="_blank" rel="noopener"><img loading="lazy" width="420" height="420" src="${thumbUrl(d,layer,art)}" alt="${label} · Vampire ${d.id}"></a><a href="${full}?download=1" download class="download-icon" aria-label="Download ${label} PNG"><span aria-hidden="true">↓</span></a></figure>`;
  };
  const state=comparisonChoice(d);
  const status=option?state.status:unchanged?comparisonFlagStatus(d.id):"A newer version is now live";
@@ -429,11 +438,13 @@ function render(){
    `<button data-filter="${filter}" aria-pressed="${$("filter").value===filter}">${labels[key]} (${items.filter(FILTERS[filter][1]).length})</button>`).join("");
  }
  $("grid").innerHTML=backgroundQueue?(pageItems().map(comparisonCard).join("")||'<p>No vampires in this filter.</p>'):pageItems().map((d,i)=>{
-  return `<div class="${tileClass(d)}${i==cur?" cur":""}" data-flags="${esc(flagText(d.id))}" data-id="${d.id}" data-i="${i}"><img loading="lazy" src="${thumbUrl(d,view)}" alt="${esc(CFG.noun)} ${d.id}"><span class="id">${d.id}</span><span class="tags">${tileTags(d)}</span>${flagBtn(d.id)}</div>`}).join("");
+  const art=`<img loading="lazy" src="${thumbUrl(d,view)}" alt="${esc(CFG.noun)} ${d.id}"><span class="id">${d.id}</span>`;
+  if(!REVIEW_ENABLED)return `<div class="tile${view==="character"?" char":""}" role="button" tabindex="0" aria-label="${esc(CFG.noun)} ${d.id}" data-id="${d.id}">${art}</div>`;
+  return `<div class="${tileClass(d)}${i==cur?" cur":""}" data-flags="${esc(flagText(d.id))}" data-id="${d.id}" data-i="${i}">${art}<span class="tags">${tileTags(d)}</span>${flagBtn(d.id)}</div>`}).join("");
  $("pageinfo").textContent=`Page ${page+1} of ${pages()} (${list.length} ${CFG.nouns})`;
  $("prev").disabled=page==0;
- if(backgroundQueue)$("next").disabled=page>=pages()-1;
- stats();saveState();
+ if(backgroundQueue||!REVIEW_ENABLED)$("next").disabled=page>=pages()-1;
+ if(REVIEW_ENABLED){stats();saveState()}
 }
 const flagBtn=id=>{const on=mine(id)?.verdict=="flag";return `<button class="fl${on?" on":""}" title="${on?"Remove my flag":"Flag"}" aria-label="${on?"Remove my flag from":"Flag"} ${id}" aria-pressed="${on}">&#9873;</button>`};
 function paintTile(id){const el=document.querySelector(`.tile[data-id="${id}"]`);if(el){const c=el.classList.contains("cur");el.className=tileClass(byId[id])+(c?" cur":"");el.dataset.flags=flagText(id);el.querySelector(".fl").outerHTML=flagBtn(id);el.querySelector(".tags").innerHTML=tileTags(byId[id])}}
@@ -467,6 +478,7 @@ function paintTChips(){
 function setTraits(next){TR=next;paintTChips();compute();goPage(0);saveState()}
 function goPage(p){page=Math.max(0,Math.min(pages()-1,p));cur=0;render();scrollTo(0,0)}
 async function pageGood(){
+ if(!REVIEW_ENABLED)return;
  const now=Math.floor(Date.now()/1000);
  const batch=pageItems().filter(d=>mine(d.id)?.verdict!="flag").map(d=>({id:d.id,by:ME,verdict:"ok",reasons:[],note:"",art_version:artVersion(reviewUpdate(d.id)),at:now}));
  try{if(batch.length)await post(batch)}catch{return}
@@ -475,7 +487,7 @@ async function pageGood(){
  if(f=="todo"){compute();fillFilters();goPage(page)}else if(page>=pages()-1){fillFilters();render()}else{fillFilters();goPage(page+1)}
 }
 function openDetail(id,seq=null){DSEQ=seq;
- const d=byId[id];dLayer="combined";const v=mine(id);dReasons=new Set(v?.reasons||[]);
+ const d=byId[id];dLayer=REVIEW_ENABLED?"combined":$("view").value||"combined";const v=mine(id);dReasons=new Set(v?.reasons||[]);
  backgroundLayer="background";
  $("bcompare").open=false;
  $("note").value=v?.note||"";$("stage").classList.remove("zoom");
@@ -534,13 +546,14 @@ async function chooseBackground(choice,id=$("detail").dataset.id){
 }
 function paintDetail(){
  const id=$("detail").dataset.id,d=byId[id];
- paintBackground(d);
  const full=fullUrl(d,dLayer);
  $("dimg").src=full;
  $("ddownload").href=full+"?download=1";
+ $("layers").innerHTML=["combined","character","background"].map(l=>`<button data-l="${l}" class="${l==dLayer?"on":""}">${l[0].toUpperCase()+l.slice(1)}</button>`).join("");
+ if(!REVIEW_ENABLED)return;
+ paintBackground(d);
  $("dfinal").hidden=!d.final_option;
  $("dfinal").textContent=d.final_option?`Final option ${d.final_option.number} · ${d.final_option.label}`:"";
- $("layers").innerHTML=["combined","character","background"].map(l=>`<button data-l="${l}" class="${l==dLayer?"on":""}">${l[0].toUpperCase()+l.slice(1)}</button>`).join("");
  $("reasons").innerHTML=REASONS.map(r=>`<button data-r="${r}" class="${dReasons.has(r)?"on":""}">${r}</button>`).join("");
  const v=mine(id);
  $("dstatus").textContent=needsReReview(id)?"Needs re-review. Check the updated art.":"";
@@ -586,10 +599,25 @@ function moreArtist(){
  $("artmore").style.display=ASHOW<AROWS.length?"":"none";$("artmore").textContent=`Show more (${AROWS.length-ASHOW} left)`;
 }
 async function init(){
- $("tools").open=$("helpbox").open=!matchMedia("(max-width:820px), (max-width:950px) and (max-height:500px)").matches;
  const r=await(await fetch("/data")).json();// Every ID goes into markup and URLs unescaped, so the page keeps only the five-digit IDs that the whole system uses.
+ REVIEW_ENABLED=r.review_enabled===true;
+ document.body.classList.toggle("viewer",!REVIEW_ENABLED);
  items=(Array.isArray(r.items)?r.items:r.items.items).filter(d=>/^\d{5}$/.test(d.id));ALL=r.verdicts;TRIAGE=r.triage;CATALOG=r.catalog_version;
  backgroundArchive=r.background_options||null;backgroundIds=new Set(backgroundArchive?.ids||[]);backgroundSelections=r.background_selections||{};
+ UPD={...r.updates};for(const d of items)if(d.upd)UPD[d.id]=d.upd;
+ CFG={...CFG,...r.config};byId=Object.fromEntries(items.map(d=>[d.id,d]));
+ if(!REVIEW_ENABLED){
+  document.title=$("ttl").textContent=CFG.title;
+  $("filter").innerHTML='<option value="all">All art</option><option value="delivery">Delivery</option>';
+  $("filter").value=linkedDelivery?"delivery":"all";
+  $("all-art").hidden=!linkedDelivery;
+  $("view").value="combined";
+  $("prev").textContent="Previous page";
+  $("next").textContent="Next page";
+  compute();render();return;
+ }
+ backgroundQueue=requestedComparison;linkedQueue=linkedDelivery||backgroundQueue;pageSize=backgroundQueue?12:PAGE;
+ $("tools").open=$("helpbox").open=!matchMedia("(max-width:820px), (max-width:950px) and (max-height:500px)").matches;
  $("vampire-review").hidden=!backgroundQueue;
  $("vampire-review-link").hidden=Boolean(backgroundQueue)||!backgroundIds.size;
  document.body.classList.toggle("comparison",Boolean(backgroundQueue));
@@ -597,7 +625,6 @@ async function init(){
   $("prev").textContent="Previous page";
   $("next").textContent="Next page";
  }
- UPD={...r.updates};for(const d of items)if(d.upd)UPD[d.id]=d.upd;
  if (!linkedDelivery) {
   let latest = null;
   for (const d of items) {
@@ -607,7 +634,7 @@ async function init(){
   }
   deliveryTag = latest?.tag || "";
  }
- CFG={...CFG,...r.config};HASCHOSEN=items.some(d=>d.mint);applyConfig();byId=Object.fromEntries(items.map(d=>[d.id,d]));
+ HASCHOSEN=items.some(d=>d.mint);applyConfig();
  for(const d of items)for(const [k,v] of Object.entries(d.traits||{}))TCOUNT[k+"\u0000"+v]=(TCOUNT[k+"\u0000"+v]||0)+1;
  fillFilters();
  const types=[...new Set(items.map(d=>d.type).filter(Boolean))].sort();
@@ -662,7 +689,7 @@ $("fixrows").onclick=async e=>{
 $("filter").onchange=$("sort").onchange=$("type").onchange=()=>{compute();goPage(0);saveState()};
 $("view").onchange=render;
 $("tile").onchange=e=>{document.documentElement.style.setProperty("--tile",e.target.value+"px");saveState()};
-$("jump").onchange=e=>{const id=e.target.value.trim().padStart(5,"0");if(byId[id])openDetail(id);else toast(`No ${CFG.noun.toLowerCase()} `+e.target.value);e.target.value=""};
+$("jump").onchange=e=>{const id=e.target.value.trim().replace(/^#/,"").padStart(5,"0");if(byId[id])openDetail(id);else toast(`No ${CFG.noun.toLowerCase()} `+e.target.value);e.target.value=""};
 $("prev").onclick=()=>goPage(page-1);$("next").onclick=()=>goPage(page+1);$("good").onclick=pageGood;
 $("grid").onclick=e=>{
  if(backgroundQueue){
@@ -709,16 +736,21 @@ $("dok").onclick=()=>dSave("ok");$("dflag").onclick=()=>dSave("flag");$("dclear"
 document.onkeydown=e=>{
  if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;
  const open=$("detail").classList.contains("open");
- if(open){if(e.key=="Escape")close();if(e.key=="ArrowRight")step(1);if(e.key=="ArrowLeft")step(-1);if(isArtist())return;if(e.key=="f")dSave("flag");if(e.key=="o")dSave("ok");return}
+ if(open){if(e.key=="Escape")close();if(e.key=="ArrowRight")step(1);if(e.key=="ArrowLeft")step(-1);if(!REVIEW_ENABLED||isArtist())return;if(e.key=="f")dSave("flag");if(e.key=="o")dSave("ok");return}
  if(backgroundQueue)return;
+ if(!REVIEW_ENABLED&&(e.key==="Enter"||e.key===" ")){
+  const tile=e.target.closest(".tile");
+  if(tile){e.preventDefault();openDetail(tile.dataset.id);return}
+  if(e.target.closest("button,a"))return;
+ }
  if(isArtist()&&e.key!="Enter"&&!e.key.startsWith("Arrow"))return;
  const n=pageItems().length,cols=getComputedStyle($("grid")).gridTemplateColumns.split(" ").length;
  const mv={ArrowRight:1,ArrowLeft:-1,ArrowDown:cols,ArrowUp:-cols}[e.key];
  if(mv){e.preventDefault();cur=Math.max(0,Math.min(n-1,cur+mv));document.querySelectorAll(".tile").forEach((t,i)=>{t.classList.toggle("cur",i==cur);if(i==cur)t.scrollIntoView({block:"nearest"})})}
  const d=pageItems()[cur];if(!d)return;
- if(e.key=="f"){setV(d.id,mine(d.id)?.verdict=="flag"?"clear":"flag");}
+ if(e.key=="f"&&REVIEW_ENABLED){setV(d.id,mine(d.id)?.verdict=="flag"?"clear":"flag");}
  if(e.key=="Enter")openDetail(d.id);
- if(e.key=="n")pageGood();
+ if(e.key=="n"){if(REVIEW_ENABLED)pageGood();else goPage(page+1)}
 };
 init();
 </script></body></html>

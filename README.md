@@ -3,6 +3,10 @@
 A private review site for an artist's deliveries, built on Cloudflare's free tier and kept current by a
 free GitHub Actions job.
 
+The gallery opens as an art viewer. To restore review controls, notes, exports, and review writes for
+the site, set `REVIEW_ENABLED = "true"` in the Worker's `[vars]` and deploy. Previously saved reviews
+remain available in review mode.
+
 An artist delivers layered art (a character, a background and the combined image for each item) as releases
 of a private GitHub repo. This project puts that art behind one password, lets a team flag what needs work,
 gives the artist a clean list of the flags, and publishes each new release by itself, overnight.

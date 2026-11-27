@@ -72,7 +72,7 @@ async function backgroundOptions(env) {
 function reviewerBackgroundOptions(archive, name) {
   if (!archive) return null;
   const { ids, items, tag, previousReviews } = archive;
-  const reviews = previousReviews && Object.hasOwn(previousReviews, name) ? previousReviews[name] : {};
+  const reviews = name && previousReviews && Object.hasOwn(previousReviews, name) ? previousReviews[name] : {};
   return { ids, items, tag, previousReviews: reviews };
 }
 
@@ -84,19 +84,21 @@ const config = (env) => Object.fromEntries(
     .filter(([, v]) => env[v]).map(([k, v]) => [k, String(env[v])]),
 );
 
-async function data(env, name) {
+async function data(env, name, reviewing) {
   // In R2, not in the Worker's assets, so that a delivery update needs no redeploy.
   const obj = await env.ART.get("meta/items.json");
   if (!obj) throw new Error("meta/items.json is missing");
-  const [items, backgrounds, [v, t, u, selections]] = await Promise.all([
+  const queries = [UPDATES_SQL, SELECTIONS_SQL];
+  if (reviewing) queries.push(VERDICTS_SQL, TRIAGE_SQL);
+  const [items, backgrounds, [u, selections, v, t]] = await Promise.all([
     obj.text(), backgroundOptions(env),
-    env.DB.batch([VERDICTS_SQL, TRIAGE_SQL, UPDATES_SQL, SELECTIONS_SQL].map((sql) => env.DB.prepare(sql))),
+    env.DB.batch(queries.map((sql) => env.DB.prepare(sql))),
   ]);
   const selected = Object.fromEntries(selections.results.map((row) => [row.id, row]));
   // A collection can exceed D1's single-value limit; each item's reviewers remain one bounded value.
-  const verdicts = v.results.map((r) => `${JSON.stringify(r.id)}:${r.people}`).join(",");
+  const verdicts = (v?.results ?? []).map((r) => `${JSON.stringify(r.id)}:${r.people}`).join(",");
   // Joined as text so that the Worker does not parse 5 MB of JSON on each load.
-  return json(`{"me":${JSON.stringify(name)},"catalog_version":${JSON.stringify(obj.httpEtag)},"config":${JSON.stringify(config(env))},"items":${items},"verdicts":{${verdicts}},"triage":${t.results[0].j},"updates":${u.results[0].j},"background_options":${JSON.stringify(reviewerBackgroundOptions(backgrounds, name))},"background_selections":${JSON.stringify(selected)}}`);
+  return json(`{"me":${JSON.stringify(name)},"review_enabled":${reviewing},"catalog_version":${JSON.stringify(obj.httpEtag)},"config":${JSON.stringify(config(env))},"items":${items},"verdicts":{${verdicts}},"triage":${t?.results[0].j ?? "{}"},"updates":${u.results[0].j},"background_options":${JSON.stringify(reviewerBackgroundOptions(backgrounds, reviewing ? name : null))},"background_selections":${JSON.stringify(selected)}}`);
 }
 
 async function selectBackground(env, name, batch, catalog, at) {
@@ -202,7 +204,10 @@ export default {
       if (!name) return text("Enter your name and the review password.", 401, { "WWW-Authenticate": `Basic realm="${String(env.SITE_TITLE || "Art review").replace(/[\x00-\x1f\x7f"\\]/g, "")}", charset="UTF-8"` });
 
       const path = url.pathname;
-      if (req.method === "POST" && ["/verdict", "/triage", "/background"].includes(path)) return await save(req, env, path, name);
+      const reviewing = env.REVIEW_ENABLED === true || env.REVIEW_ENABLED === "true";
+      if (req.method === "POST" && ["/verdict", "/triage", "/background"].includes(path)) {
+        return reviewing ? await save(req, env, path, name) : text("Review mode is disabled.", 403);
+      }
       if (req.method !== "GET") return text("not found", 404);
       if (path === "/") {
         const page = await env.ASSETS.fetch(new URL("/gallery.html", url));
@@ -212,9 +217,10 @@ export default {
         const script = await env.ASSETS.fetch(new URL(path, url));
         return new Response(script.body, { status: script.status, headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store", "X-Robots-Tag": "noindex" } });
       }
-      if (path === "/data") return await data(env, name);
-      if (path === "/flagged.csv") return await exportCsv(env, false);
-      if (path === "/artist.csv") return await exportCsv(env, true);
+      if (path === "/data") return await data(env, name, reviewing);
+      if (path === "/flagged.csv" || path === "/artist.csv") {
+        return reviewing ? await exportCsv(env, path === "/artist.csv") : text("Review mode is disabled.", 403);
+      }
       let m;
       if ((m = OPTION_PAGE.exec(path))) {
         return await object(req, env, `meta/option-deliveries/${m[1]}.html`, "text/html; charset=utf-8", {

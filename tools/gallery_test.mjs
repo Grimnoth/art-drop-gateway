@@ -19,6 +19,7 @@ function gallery({ failSave = false, data, settings = {}, search = "", backgroun
       const classes = new Set();
       nodes.set(id, { value: id === "filter" ? "all" : "", style: {}, dataset: {},
         setAttribute(name, value) { this[name] = value; },
+        insertAdjacentHTML(_position, content) { this.innerHTML = (this.innerHTML ?? "") + content; },
         classList: { add: (...s) => s.forEach((x) => classes.add(x)), remove: (s) => classes.delete(s), contains: (s) => classes.has(s),
           toggle: (s, force) => force ? classes.add(s) : classes.delete(s) } });
     }
@@ -29,11 +30,12 @@ function gallery({ failSave = false, data, settings = {}, search = "", backgroun
     localStorage: { getItem: () => saved, setItem: (_key, value) => { saved = value; } },
     matchMedia: () => ({ matches: false }), scrollTo() {}, setTimeout() {},
     fetch: async (path, options) => {
-      if (path === "/data") return { json: async () => data };
+      if (path === "/data") return { json: async () => ({ review_enabled: true, ...data }) };
       writes.push({ path, body: JSON.parse(options.body) });
       return { ok: !failSave, status: failSave ? 503 : 200, json: async () => backgroundResponse };
     } });
   vm.runInContext(script, context);
+  vm.runInContext('if (typeof REVIEW_ENABLED !== "undefined") REVIEW_ENABLED = true;', context);
   vm.runInContext(`ME="Ada"; items=[{id:"00001"},{id:"00002"},{id:"00003"}];
     byId=Object.fromEntries(items.map(d=>[d.id,d])); list=items;
     ALL={"00001":{Ada:{by:"Ada",verdict:"flag",reasons:["Edge halo"],note:"Check the wing",at:1}},
@@ -59,6 +61,31 @@ test("the delivery filter shows only the latest batch", async () => {
   g.node("filter").value = "delivery";
   g.run("compute()");
   assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002");
+});
+
+test("viewer mode shows art and IDs, keeps direct delivery and layer navigation, and ignores review preferences", async () => {
+  const prefix = "r/0123456789abcdef/";
+  const g = gallery({
+    data: { ...deliveryData, review_enabled: false, me: "Luis", config: { artist: "Luis" },
+      items: [{ ...deliveryData.items[0], mint: true, v: { character: prefix } }, ...deliveryData.items.slice(1)],
+      verdicts: { "00001": { Luis: { verdict: "flag", note: "A private note" } } } },
+    search: "?delivery=delivery-2026-11-21",
+    settings: { f: "mine", ty: "Ghost", tr: { Hat: "None" }, page: 7 },
+  });
+  await g.run("init()");
+  assert.equal(g.node("body").classList.contains("viewer"), true);
+  assert.equal(g.node("body").classList.contains("artist"), false);
+  assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00002");
+  assert.equal(g.run("page"), 0);
+  assert.match(g.node("grid").innerHTML, /<img[^>]+><span class="id">00001<\/span>/);
+  assert.doesNotMatch(g.node("grid").innerHTML, /class="tags"|class="fl|data-flags|A private note|tile cur/);
+  g.node("view").value = "character";
+  g.node("view").onchange();
+  g.node("jump").onchange({ target: { value: "1" } });
+  assert.equal(g.node("ddownload").href, "/o/r/0123456789abcdef/Images/ID00001/00001__character.png?download=1");
+  assert.equal(g.node("artlist").classList.contains("open"), false);
+  await g.run('setV("00001","flag")');
+  assert.equal(g.writes.length, 0);
 });
 
 test("the download follows the full-size layer in the artwork detail", () => {
