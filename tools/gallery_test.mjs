@@ -80,6 +80,41 @@ test("only an approved clip loads next to the still, and the next pirate clears 
   assert.equal(g.node("dimg").src, "/full/00002/combined.png");
 });
 
+test("approved living photos request muted inline autoplay and keep controls", () => {
+  const player = html.match(/<video id="dvideo"[^>]*>/)?.[0];
+  for (const attribute of ["autoplay", "muted", "playsinline", "loop", "controls"])
+    assert.match(player, new RegExp(`\\s${attribute}(?:\\s|>)`));
+});
+
+test("Animated is a direct counted trait backed by live videos and combines with other traits", async () => {
+  const g = gallery({ data: {
+    ...deliveryData, review_enabled: false, animated_ids: ["00002", "00003", "99999"],
+    items: [
+      { ...deliveryData.items[0], animated: true, traits: { Hat: "Cap", Animated: "Yes" } },
+      deliveryData.items[1],
+      { ...deliveryData.items[2], traits: { Hat: "Cap" } },
+    ],
+  } });
+  await g.run("init()");
+  const markup = () => g.node("trait-values-0").innerHTML;
+  assert.match(markup(), /data-tk="Animated" data-tv="Yes"/);
+  assert.match(markup(), /Animated<\/span><span[^>]*>2<\/span>/);
+  function select(tk, tv) {
+    g.node("trait-groups").onclick({ target: { closest: () => ({ dataset: { tk, tv } }) } });
+  }
+  select("Animated", "Yes");
+  assert.equal(g.run('list.map(d=>d.id).join(",")'), "00002,00003");
+  select("Hat", "Cap");
+  assert.equal(g.run('list.map(d=>d.id).join(",")'), "00003");
+  assert.match(markup(), /Animated<\/span><span[^>]*>1<\/span>/);
+  select("Animated", "Yes");
+  assert.equal(g.run('list.map(d=>d.id).join(",")'), "00001,00003");
+  await g.run('openDetail("00003")');
+  assert.match(g.node("dtraitchips").innerHTML, /data-tk="Animated" data-tv="Yes"/);
+  await g.run('openDetail("00001")');
+  assert.doesNotMatch(g.node("dtraitchips").innerHTML, /data-tk="Animated"/);
+});
+
 test("a late approval response cannot reopen a player after leaving a pirate", async () => {
   let showFirst;
   const g = gallery({
